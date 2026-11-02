@@ -62,12 +62,12 @@ class MainWindow(QMainWindow):
         self.setup.savePreset.connect(self._save_preset)
         self.setup.trackChanged.connect(self._track_changed)
         self.scanp.cancel.connect(self.cancel_work)
-        self.review.back.connect(lambda: self.stack.setCurrentWidget(self.setup))
+        self.review.back.connect(lambda: (self.review.leave(), self.stack.setCurrentWidget(self.setup)))
         self.review.render.connect(self.start_render)
         self.review.changed.connect(lambda: self.project and self.project.save())
         self.renderp.cancel.connect(self.cancel_work)
-        self.renderp.again.connect(self.go_home)
-        self.renderp.backToReview.connect(lambda: self.stack.setCurrentWidget(self.review))
+        self.renderp.again.connect(lambda: (self.renderp.leave(), self.go_home()))
+        self.renderp.backToReview.connect(self._back_to_review)
         self.setAcceptDrops(True)
 
     # ------------------------------------------------------------ helpers
@@ -237,6 +237,7 @@ class MainWindow(QMainWindow):
         self.scanp.start(Path(self.project.source).name, stages, skipped)
         self.stack.setCurrentWidget(self.scanp)
         self._filters = f
+        self.review.leave()
         self.worker = Worker(scan, self.project, f, self.settings, get_gpu_pack=get_gpu)
         self.worker.progress.connect(self.scanp.on_progress)
         self.worker.log.connect(self._log)
@@ -287,6 +288,8 @@ class MainWindow(QMainWindow):
             self.error("Can't overwrite the original", "Choose a different output folder in Settings.")
             return
         reencode = bool(self.project.active_scenes())
+        self._filters_used = f
+        self.review.leave()
         self.renderp.start(Path(self.project.source).name, out, reencode)
         self.stack.setCurrentWidget(self.renderp)
         self.worker = Worker(render_project, self.project, f, self.settings, out)
@@ -297,10 +300,15 @@ class MainWindow(QMainWindow):
         self.worker.cancelled.connect(self._cancelled)
         self.worker.start()
 
+    def _back_to_review(self):
+        self.renderp.leave()
+        self.review.player.load(self.project.source)
+        self.stack.setCurrentWidget(self.review)
+
     def _render_done(self, result):
         self.worker = None
         log.info("Render done %s", result)
-        self.renderp.done(result)
+        self.renderp.show_result(result, self.project, self._filters_used, self.info.duration)
 
     # ------------------------------------------------------------ window
     def closeEvent(self, e):
@@ -320,10 +328,11 @@ class MainWindow(QMainWindow):
 def self_test(out_path):
     """Used by the build pipeline: check that everything the app needs is inside the package."""
     report, ok = {"version": __version__}, True
+    import importlib
     for mod in ("faster_whisper", "ctranslate2", "onnxruntime", "nudenet", "cv2", "tokenizers",
-                "numpy", "requests", "PySide6"):
+                "numpy", "requests", "PySide6", "PySide6.QtMultimedia", "PySide6.QtMultimediaWidgets"):
         try:
-            m = __import__(mod)
+            m = importlib.import_module(mod)
             report[mod] = getattr(m, "__version__", "ok")
         except Exception as e:
             report[mod] = f"FAILED: {e}"

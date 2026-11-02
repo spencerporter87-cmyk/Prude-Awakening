@@ -58,6 +58,8 @@ def run_tour(app, out_dir: Path, video=None):
                 subprocess.run([ffmpeg(), "-y", "-loglevel", "error", "-ss", str(t), "-i", video,
                                 "-frames:v", "1", "-vf", "scale=384:-2", str(f)])
                 thumbs.append(str(f))
+            p.mutes.append({"id": "k", "start": 21.0, "end": 21.6, "words": "crap", "category": "mild",
+                            "context": "oh crap", "on": False})
             p.scenes = [
                 {"id": "a", "kind": "violence", "label": "Violence", "start": 2.0, "end": 6.5,
                  "score": 0.71, "thumb": thumbs[0], "thumb_blur": thumbs[0], "on": True},
@@ -67,7 +69,15 @@ def run_tour(app, out_dir: Path, video=None):
             w._filters = w.setup.filters()
             w.review.set_project(p, w.info, w.settings, w._filters)
             w.stack.setCurrentWidget(w.review)
-        add(fake_review, 1500)
+        add(fake_review, 2500)
+
+        def media_check():
+            import json
+            from .player import HAVE_MM
+            w.review.player.seek_to(8.0)
+            (out_dir / "media.json").write_text(json.dumps({
+                "have_multimedia": HAVE_MM, "review_duration": w.review.player.duration()}))
+        add(media_check, 1500)
         add(lambda: shot("4-review-words"))
         add(lambda: w.review.tabs.setCurrentIndex(1))
         add(lambda: shot("5-review-scenes"))
@@ -78,11 +88,14 @@ def run_tour(app, out_dir: Path, video=None):
             w.renderp.on_progress("render", 0.37, "Making the clean copy (re-encoding video)")
         add(fake_render)
         add(lambda: shot("6-rendering"))
-        add(lambda: (w.renderp.done({"output": str(Path(video).with_name("demo (clean).mkv")), "mutes": 3,
-                                     "cuts": 1, "blackouts": 0, "removed_seconds": 4.5,
-                                     "how": "video re-encoded on the graphics card (NVENC HEVC)",
-                                     "notes": ["Made subtitles from the dialogue: demo (clean).en.srt"]})))
+        add(lambda: w.renderp.show_result(
+            {"output": str(video), "mutes": 3, "cuts": 1, "blackouts": 0, "removed_seconds": 4.5,
+             "how": "video re-encoded on the graphics card (NVENC HEVC)",
+             "notes": ["Made subtitles from the dialogue: demo (clean).en.srt"]},
+            w.project, w._filters, w.info.duration), 2500)
+        add(lambda: w.renderp.player.seek_to(6.0), 1200)
         add(lambda: shot("7-done"))
+        add(lambda: w.renderp.leave())
 
     def settings_shot():
         d = SettingsDialog(w.settings, w, gpu_present=True)

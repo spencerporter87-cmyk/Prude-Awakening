@@ -63,6 +63,9 @@ jobs:
           if ($p.ExitCode -ne 0) { throw "self-test failed" }
           $p = Start-Process dist/PrudeAwakening/PrudeAwakening.exe -ArgumentList "--tour","$PWD/out/screens-packaged","--video","`"$PWD/out/e2e/e2e movie.mkv`"" -PassThru -Wait
           Get-ChildItem out/screens-packaged
+          Get-Content out/screens-packaged/media.json
+          $m = Get-Content out/screens-packaged/media.json | ConvertFrom-Json
+          if (-not $m.have_multimedia -or $m.review_duration -lt 1) { throw "built-in player could not open the movie" }
           $mv = "$PWD/out/e2e/packaged test.mkv"; Copy-Item "out/e2e/e2e movie.mkv" $mv
           $env:PRUDE_CONSOLE_LOG = "$PWD/out/packaged-console.log"
           $p = Start-Process dist/PrudeAwakening/PrudeAwakening.exe -PassThru -ArgumentList "--cli","`"$mv`"","--words","strong,blasphemy,mild","--model","tiny.en","--device","cpu","--scenes","nudity,violence","--describe","`"a colorful television test pattern`"","--action","black","--models-dir","`"$PWD/out/models`"","--summary-json","`"$PWD/out/packaged-summary.json`""

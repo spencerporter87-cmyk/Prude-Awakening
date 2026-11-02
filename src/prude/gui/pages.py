@@ -19,6 +19,9 @@ from ..pipeline import STAGES
 from ..scenes import SCENE_CATEGORIES, SCENE_NAMES
 from ..settings import FilterOptions
 from ..words import CATEGORIES, CATEGORY_NAMES
+from ..render import merge_ranges
+from ..subtitles import TimeMap
+from .player import HAVE_MM, Player
 from .widgets import (Card, DropZone, StageRow, TimeEdit, button, fmt_time, icon_pixmap, label)
 
 
@@ -436,7 +439,7 @@ class TimesDialog(QDialog):
 
 
 class SceneRow(QFrame):
-    def __init__(self, scene, source, blurred, on_change):
+    def __init__(self, scene, source, blurred, on_change, on_play=None):
         super().__init__()
         self.s, self.source, self.on_change = scene, source, on_change
         self.setObjectName("Card")
@@ -444,7 +447,7 @@ class SceneRow(QFrame):
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(14)
         self.pic = QLabel()
-        self.pic.setFixedSize(192, 108)
+        self.pic.setFixedSize(144, 81)
         self.pic.setStyleSheet("background: #222; border-radius: 8px;")
         self.pic.setAlignment(Qt.AlignCenter)
         lay.addWidget(self.pic)
@@ -470,8 +473,8 @@ class SceneRow(QFrame):
         times.addStretch()
         col.addLayout(times)
         btns = QHBoxLayout()
-        btns.addWidget(button("▶  Play", None, lambda: play_clip(source, self.s["start"], self.s["end"],
-                                                                  scene.get("label", "Scene"))))
+        btns.addWidget(button("▶  Play", None, lambda: on_play(self.s) if on_play else
+                              play_clip(source, self.s["start"], self.s["end"], scene.get("label", "Scene"))))
         self.chk = QCheckBox("Remove this scene")
         self.chk.setChecked(scene.get("on", True))
         self.chk.toggled.connect(self._toggle)
@@ -488,7 +491,7 @@ class SceneRow(QFrame):
             self.pic.setText("No picture")
             self.pic.setStyleSheet("background: #EFE6D9; color: #6B566E; border-radius: 8px;")
         else:
-            self.pic.setPixmap(pm.scaled(192, 108, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
+            self.pic.setPixmap(pm.scaled(144, 81, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
 
     def _times(self, *_):
         a, b = self.a.seconds(), self.b.seconds()
@@ -526,11 +529,27 @@ class ReviewPage(QWidget):
         lay.addLayout(head)
         self.title = label("Review", "H1")
         lay.addWidget(self.title)
-        self.sub = label("Untick anything you want to keep. Use ▶ to hear or see it first.", "Muted", wrap=True)
+        self.sub = label("Untick anything you want to keep. Click ▶ Play, or anywhere on the timeline, "
+                         "to watch that moment. Turn on “Preview with filters on” to see the result before saving.",
+                         "Muted", wrap=True)
         lay.addWidget(self.sub)
 
+        main = QHBoxLayout()
+        main.setSpacing(16)
+        self.player = Player(live_toggle=True, timeline_inside=False)
+        main.addWidget(self.player, 5)
         self.tabs = QTabWidget()
-        lay.addWidget(self.tabs, 1)
+        main.addWidget(self.tabs, 6)
+        lay.addLayout(main, 1)
+        tl_card = QFrame()
+        tl_card.setObjectName("Card")
+        tl_lay = QVBoxLayout(tl_card)
+        tl_lay.setContentsMargins(10, 10, 14, 8)
+        tl_lay.setSpacing(2)
+        tl_lay.addWidget(self.player.timeline)
+        tl_lay.addLayout(self.player.legend_box)
+        lay.addWidget(tl_card)
+        self.player.timeline.itemClicked.connect(self._timeline_item)
         # words
         wt = QWidget()
         wl = QVBoxLayout(wt)
@@ -592,6 +611,8 @@ class ReviewPage(QWidget):
         self.show_pics.setChecked(not self.blurred)
         self.show_pics.blockSignals(False)
         self.title.setText(f"Review: {Path(project.source).name}")
+        self.player.set_legend("plan", filters.scene_action)
+        self.player.load(project.source)
         self._fill_words()
         self._fill_scenes()
         self._update()
@@ -614,8 +635,7 @@ class ReviewPage(QWidget):
             cat = "Added by you" if m.get("manual") else CATEGORY_NAMES.get(m.get("category"), "")
             self.table.setItem(r, 3, QTableWidgetItem(cat))
             self.table.setItem(r, 4, QTableWidgetItem(m.get("context", "")))
-            b = button("▶ Play", "Link", lambda _=False, m=m: play_clip(self.project.source, m["start"], m["end"],
-                                                                   m.get("words", "")), tip="Hear it in the original")
+            b = button("▶ Play", "Link", lambda _=False, m=m: self._play(m), tip="Hear it in the original")
             self.table.setCellWidget(r, 5, b)
         self.table.blockSignals(False)
         self.tabs.setTabText(0, f"Words ({len(self.project.mutes)})")
@@ -631,7 +651,7 @@ class ReviewPage(QWidget):
                 "No scenes to remove. (Turn on scene options in settings to look for some.)", "Muted"))
         for s in self.project.scenes:
             row = SceneRow(s, self.project.source, self.blurred and s.get("kind") in ("nudity", "sexual"),
-                           self._scene_changed)
+                           self._scene_changed, self._play)
             self.scene_rows.append(row)
             self.scene_list.addWidget(row)
         self.scene_list.addStretch()
@@ -687,7 +707,36 @@ class ReviewPage(QWidget):
                 self._update()
                 self.changed.emit()
 
+    def _play(self, item):
+        a, b = float(item["start"]), float(item["end"])
+        if not (HAVE_MM and self.player.play_range(max(0.0, a - 2.0), b)):
+            play_clip(self.project.source, a, b, item.get("words") or item.get("label", ""))
+
+    def _timeline_item(self, kind, i):
+        if kind == "mute":
+            self.tabs.setCurrentIndex(0)
+            self.table.selectRow(i)
+            self.table.scrollToItem(self.table.item(i, 0))
+        else:
+            self.tabs.setCurrentIndex(1)
+            rows = getattr(self, "scene_rows", [])
+            if 0 <= i < len(rows):
+                self.scene_scroll.ensureWidgetVisible(rows[i])
+
+    def leave(self):
+        self.player.stop()
+
+    def _refresh_timeline(self):
+        p = self.project
+        active = merge_ranges((s["start"], s["end"]) for s in p.scenes if s.get("on", True))
+        cut = self.filters.scene_action == "cut"
+        self.player.set_filters(merge_ranges((m["start"], m["end"]) for m in p.mutes if m.get("on", True)),
+                                active if cut else [], [] if cut else active)
+        dur = self.info.duration if self.info else max([1.0] + [x["end"] for x in p.mutes + p.scenes])
+        self.player.timeline.set_plan(dur, p.mutes, p.scenes, self.filters.scene_action)
+
     def _update(self):
+        self._refresh_timeline()
         mutes = [m for m in self.project.mutes if m.get("on", True)]
         scenes = [s for s in self.project.scenes if s.get("on", True)]
         secs = sum(s["end"] - s["start"] for s in scenes)
@@ -714,8 +763,8 @@ class RenderPage(QWidget):
         super().__init__()
         self.setObjectName("Page")
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(60, 50, 60, 30)
-        lay.setSpacing(14)
+        lay.setContentsMargins(40, 28, 40, 22)
+        lay.setSpacing(10)
         self.title = label("Making the clean copy", "H1")
         lay.addWidget(self.title)
         self.sub = label("", "Muted", wrap=True)
@@ -728,15 +777,21 @@ class RenderPage(QWidget):
         lay.addWidget(self.msg)
         self.notes = label("", "Muted", wrap=True)
         lay.addWidget(self.notes)
-        lay.addStretch()
+        self.player = Player(live_toggle=False, timeline_inside=True)
+        self.player.setVisible(False)
+        lay.addWidget(self.player, 1)
+        self.spacer = QWidget()
+        lay.addWidget(self.spacer, 1)
         self.btns = QHBoxLayout()
         self.cancel_btn = button("Cancel", "Danger", self.cancel.emit)
-        self.play_btn = button("▶  Play clean copy", "Primary", self._play)
+        self.play_btn = button("▶  Play / pause", "Primary", self._play)
+        self.ext_btn = button("Open in my video player", None,
+                              lambda: self.output and hasattr(os, "startfile") and os.startfile(self.output))
         self.folder_btn = button("Open folder", None, self._folder)
         self.review_btn = button("Back to review", None, self.backToReview.emit)
         self.again_btn = button("Clean another movie", None, self.again.emit)
         self.btns.addStretch()
-        for b in (self.review_btn, self.again_btn, self.folder_btn, self.play_btn, self.cancel_btn):
+        for b in (self.review_btn, self.again_btn, self.folder_btn, self.ext_btn, self.play_btn, self.cancel_btn):
             self.btns.addWidget(b)
         lay.addLayout(self.btns)
         self.output = None
@@ -750,7 +805,11 @@ class RenderPage(QWidget):
         self.msg.setText("")
         self.notes.setText("")
         self.cancel_btn.setVisible(True)
-        for b in (self.play_btn, self.folder_btn, self.again_btn, self.review_btn):
+        self.player.stop()
+        self.player.setVisible(False)
+        self.spacer.setVisible(True)
+        self.bar.setVisible(True)
+        for b in (self.play_btn, self.folder_btn, self.again_btn, self.review_btn, self.ext_btn):
             b.setVisible(False)
 
     def on_progress(self, _stage, frac, msg):
@@ -771,11 +830,39 @@ class RenderPage(QWidget):
         self.msg.setText(" · ".join(bits))
         self.notes.setText("\n".join(result.get("notes", [])))
         self.cancel_btn.setVisible(False)
-        for b in (self.play_btn, self.folder_btn, self.again_btn, self.review_btn):
+        for b in (self.play_btn, self.folder_btn, self.again_btn, self.review_btn, self.ext_btn):
             b.setVisible(True)
 
+    def show_result(self, result, project, filters, duration):
+        """Player for the clean copy + timeline of what changed (in the clean copy's time)."""
+        self.done(result)
+        scenes = merge_ranges((s["start"], s["end"]) for s in project.active_scenes())
+        labels = {(round(s["start"], 2)): s.get("label", "Scene") for s in project.active_scenes()}
+        cuts = scenes if filters.scene_action == "cut" else []
+        tm = TimeMap(cuts)
+        mutes = []
+        for m in project.active_mutes():
+            a, b = tm(m["start"]), tm(m["end"])
+            if a is not None and b is not None:
+                mutes.append({"start": a, "end": b, "words": m.get("words", "")})
+        blackouts = [] if cuts else [{"start": a, "end": b, "label": labels.get(round(a, 2), "Scene")}
+                                     for a, b in scenes]
+        cut_points = [(tm(a), b - a, labels.get(round(a, 2), "Scene")) for a, b in cuts]
+        new_dur = max(1.0, duration - sum(b - a for a, b in cuts))
+        self.player.timeline.set_result(new_dur, mutes, blackouts, cut_points)
+        self.player.set_legend("result")
+        self.player.setVisible(True)
+        self.spacer.setVisible(False)
+        self.bar.setVisible(False)
+        self.player.load(self.output)
+
+    def leave(self):
+        self.player.stop()
+
     def _play(self):
-        if self.output and hasattr(os, "startfile"):
+        if self.output and HAVE_MM and self.player.isVisible():
+            self.player.toggle()
+        elif self.output and hasattr(os, "startfile"):
             os.startfile(self.output)
 
     def _folder(self):
