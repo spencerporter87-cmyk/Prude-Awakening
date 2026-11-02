@@ -1,5 +1,6 @@
 faster-whisper>=1.1
 PySide6-Essentials>=6.7
+PySide6-Addons>=6.7
 nudenet>=3.4
 onnxruntime>=1.18
 opencv-python-headless>=4.9
