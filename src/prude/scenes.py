@@ -203,7 +203,11 @@ def describe_scores(image_embs, scorer, categories, custom_lines):
 
 def build_segments(times, scores, threshold, boundaries, duration, min_hits=1, strong=None,
                    gap=3.0, fps=FPS):
-    """times/scores per frame -> [(start, end, peak_score, peak_index)]."""
+    """times/scores per frame -> [(start, end, peak_score, peak_index)] as plain Python numbers."""
+    times = [float(t) for t in times]
+    scores = [float(s) for s in scores]
+    boundaries = [float(b) for b in boundaries]
+    duration = float(duration)
     hits = [i for i, s in enumerate(scores) if s >= threshold]
     if min_hits > 1 and strong is not None:
         keep = []
@@ -231,7 +235,7 @@ def build_segments(times, scores, threshold, boundaries, duration, min_hits=1, s
             a = min(a, max(before))
         if after:
             b = max(b, min(after))
-        out.append((max(0.0, round(a, 2)), min(duration, round(b, 2)), float(peak), idx))
+        out.append((max(0.0, round(float(a), 2)), min(duration, round(float(b), 2)), float(peak), int(idx)))
     # merge overlaps after snapping
     merged = []
     for s in sorted(out):

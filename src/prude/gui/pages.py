@@ -513,7 +513,7 @@ class ReviewPage(QWidget):
     render = Signal()
     changed = Signal()
 
-    COLS = ["Mute", "Time", "Words", "Type", "What was said", ""]
+    COLS = ["Mute", "Time", "Words", "What was said", ""]
 
     def __init__(self):
         super().__init__()
@@ -571,9 +571,10 @@ class ReviewPage(QWidget):
         hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(4, QHeaderView.Stretch)
-        hh.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(3, QHeaderView.Stretch)
+        hh.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.table.setWordWrap(False)
+        self.table.setTextElideMode(Qt.ElideRight)
         self.table.itemChanged.connect(self._item_changed)
         wl.addWidget(self.table)
         self.tabs.addTab(wt, "Words")
@@ -631,12 +632,15 @@ class ReviewPage(QWidget):
             chk.setCheckState(Qt.Checked if m.get("on", True) else Qt.Unchecked)
             self.table.setItem(r, 0, chk)
             self.table.setItem(r, 1, QTableWidgetItem(fmt_time(m["start"])))
-            self.table.setItem(r, 2, QTableWidgetItem(m.get("words", "")))
             cat = "Added by you" if m.get("manual") else CATEGORY_NAMES.get(m.get("category"), "")
-            self.table.setItem(r, 3, QTableWidgetItem(cat))
-            self.table.setItem(r, 4, QTableWidgetItem(m.get("context", "")))
+            wi = QTableWidgetItem(m.get("words", ""))
+            wi.setToolTip(cat)
+            self.table.setItem(r, 2, wi)
+            ci = QTableWidgetItem(m.get("context", ""))
+            ci.setToolTip(f"{cat}\n{m.get('context', '')}")
+            self.table.setItem(r, 3, ci)
             b = button("▶ Play", "Link", lambda _=False, m=m: self._play(m), tip="Hear it in the original")
-            self.table.setCellWidget(r, 5, b)
+            self.table.setCellWidget(r, 4, b)
         self.table.blockSignals(False)
         self.tabs.setTabText(0, f"Words ({len(self.project.mutes)})")
 
@@ -821,11 +825,13 @@ class RenderPage(QWidget):
         self.title.setText("✓  Your clean copy is ready")
         self.sub.setText(self.output)
         self.bar.setValue(1000)
-        bits = [f"{result['mutes']} words silenced"]
+        def n(k, word):
+            return f"{k} {word}{'' if k == 1 else 's'}"
+        bits = [n(result["mutes"], "word") + " silenced"]
         if result["cuts"]:
-            bits.append(f"{result['cuts']} scenes cut ({fmt_time(result['removed_seconds'], False)} removed)")
+            bits.append(n(result["cuts"], "scene") + f" cut ({fmt_time(result['removed_seconds'], False)} removed)")
         if result["blackouts"]:
-            bits.append(f"{result['blackouts']} scenes blacked out")
+            bits.append(n(result["blackouts"], "scene") + " blacked out")
         bits.append(result["how"])
         self.msg.setText(" · ".join(bits))
         self.notes.setText("\n".join(result.get("notes", [])))

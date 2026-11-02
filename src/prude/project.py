@@ -10,6 +10,15 @@ from pathlib import Path
 from .paths import projects_dir
 
 
+def _plain(o):
+    """numpy numbers and paths -> plain JSON values."""
+    if hasattr(o, "item"):
+        return o.item()
+    if hasattr(o, "tolist"):
+        return o.tolist()
+    return str(o)
+
+
 def project_key(path: Path) -> str:
     st = path.stat()
     h = hashlib.sha1(f"{path.resolve()}|{st.st_size}|{int(st.st_mtime)}".encode("utf-8"))
@@ -34,7 +43,7 @@ class Project:
         return d
 
     def save(self):
-        (self.dir / "project.json").write_text(json.dumps(asdict(self)), encoding="utf-8")
+        (self.dir / "project.json").write_text(json.dumps(asdict(self), default=_plain), encoding="utf-8")
 
     @classmethod
     def open(cls, source) -> "Project":

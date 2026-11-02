@@ -186,3 +186,17 @@ def test_cut_drops_empty_subtitles(media_dir, fake_words, tmp_path):
     p.scenes = [{"id": "x", "kind": "violence", "label": "V", "start": 0.5, "end": 19.0, "on": True}]
     res = pipeline.render_project(p, f, Settings(device="cpu"), tmp_path / "most.mkv")
     assert Path(res["output"]).exists()
+
+
+def test_numpy_scene_times_save(media_dir, fake_words):
+    import json
+    import numpy as np
+    times = np.arange(0, 60, dtype=np.float32) + np.float32(0.3)
+    scores = np.zeros(60, dtype=np.float32)
+    scores[30:33] = 0.9
+    segs = build_segments(times, scores, 0.5, np.array([28.8], dtype=np.float32), 60.0)
+    assert all(type(x) in (float, int) for s in segs for x in s)
+    p = _project(media_dir / "movie51.mkv", fake_words)
+    p.scenes = [{"start": np.float32(1.5), "end": np.float64(2.5), "score": np.float32(0.7), "on": True}]
+    p.save()
+    assert json.loads((p.dir / "project.json").read_text())["scenes"][0]["start"] == 1.5

@@ -99,7 +99,8 @@ def main(argv=None):
             Path(a.summary_json).write_text(json.dumps({
                 "mutes": project.mutes, "scenes": project.scenes, "result": result,
                 "transcript_words": len(project.transcript.get("words") or []),
-                "device": project.transcript.get("device"), "filters": asdict(f)}, indent=1))
+                "device": project.transcript.get("device"), "filters": asdict(f)}, indent=1,
+                default=lambda o: o.item() if hasattr(o, "item") else str(o)))
     except Cancelled:
         print("Cancelled.")
         return 130

@@ -207,7 +207,7 @@ def legend(mode="plan", action="cut"):
         sw(CUT.name() if action == "cut" else BLACK.name(), "Scene cut out" if action == "cut" else "Scene blacked out")
         sw(OFF.name(), "Kept (unticked)", outline=True)
     else:
-        sw(CUT.name(), "▼ Where a scene was cut")
+        sw(CUT.name(), "Where a scene was cut")
         sw(BLACK.name(), "Blacked out")
     sw(TEAL, "Now playing")
     lay.addStretch()
