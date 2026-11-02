@@ -27,16 +27,19 @@ def ffprobe() -> str:
 
 
 def run(cmd, **kw):
-    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                          errors="replace", creationflags=NO_WINDOW, **kw)
+    cmd = list(cmd)
+    if Path(cmd[0]).stem.lower() == "ffmpeg" and "-nostdin" not in cmd:
+        cmd.insert(1, "-nostdin")
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          stdin=subprocess.DEVNULL, creationflags=NO_WINDOW, **kw)
 
 
 def run_ffmpeg(cmd, duration, progress=None, cancel=None, label="Working"):
     """Run an ffmpeg command (without -progress) and report 0..1 progress.
     Raises MediaError with ffmpeg's message on failure, Cancelled on cancel."""
-    full = [cmd[0], "-hide_banner", "-loglevel", "error", "-nostats",
+    full = [cmd[0], "-nostdin", "-hide_banner", "-loglevel", "error", "-nostats",
             "-progress", "pipe:1"] + list(cmd[1:])
-    proc = subprocess.Popen(full, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    proc = subprocess.Popen(full, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, encoding="utf-8", errors="replace",
                             creationflags=NO_WINDOW)
     try:

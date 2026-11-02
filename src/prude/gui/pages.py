@@ -43,6 +43,7 @@ def play_clip(source, start, end, title="Preview"):
         return
     subprocess.Popen([exe, "-hide_banner", "-loglevel", "quiet", "-autoexit", "-ss", f"{start:.2f}",
                       "-t", f"{dur:.2f}", "-window_title", title, "-x", "960", "-y", "540", str(source)],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      creationflags=NO_WINDOW)
 
 

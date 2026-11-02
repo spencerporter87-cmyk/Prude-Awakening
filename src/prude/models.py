@@ -180,7 +180,7 @@ def ensure_clip(models_dir, progress=None, cancel=None) -> Path:
 
 def nvidia_gpu_present() -> bool:
     try:
-        r = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True,
+        r = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True, stdin=subprocess.DEVNULL,
                            timeout=10, creationflags=NO_WINDOW)
         return r.returncode == 0 and "GPU" in r.stdout
     except Exception:
