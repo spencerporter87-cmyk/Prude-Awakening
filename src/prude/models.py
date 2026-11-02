@@ -195,21 +195,33 @@ def gpu_pack_ready(models_dir) -> bool:
     return (gpu_pack_dir(models_dir) / ".complete").exists()
 
 
+GPU_MAJOR = {"nvidia-cublas-cu12": "12.", "nvidia-cudnn-cu12": "9.", "nvidia-cuda-runtime-cu12": "12."}
+
+
+def _vkey(v):
+    return [int(x) for x in v.split(".") if x.isdigit()]
+
+
 def gpu_pack_plan():
-    """[(url, filename, size)] of NVIDIA's Windows packages to fetch."""
+    """[(url, filename, size)]: newest Windows build of each NVIDIA package that
+    matches what CTranslate2 needs (CUDA 12, cuDNN 9)."""
     s = _session()
     wheels = []
     for pkg in GPU_WHEELS:
         meta = s.get(f"https://pypi.org/pypi/{pkg}/json", timeout=30).json()
-        urls = meta.get("urls", [])
-        if pkg == "nvidia-cudnn-cu12" and not meta["info"]["version"].startswith("9."):
-            rel = sorted((v for v in meta["releases"] if v.startswith("9.")),
-                         key=lambda v: [int(x) for x in v.split(".") if x.isdigit()])
-            urls = meta["releases"][rel[-1]] if rel else urls
-        win = [u for u in urls if u["filename"].endswith("win_amd64.whl")]
-        if not win:
+        versions = sorted((v for v in meta.get("releases", {})
+                           if v.startswith(GPU_MAJOR[pkg]) and all(p.isdigit() for p in v.split("."))),
+                          key=_vkey, reverse=True)
+        pick = None
+        for v in versions:
+            win = [u for u in meta["releases"][v] if u["filename"].endswith("win_amd64.whl")
+                   and not u.get("yanked")]
+            if win:
+                pick = win[0]
+                break
+        if not pick:
             raise DownloadError(f"No Windows package found for {pkg}.")
-        wheels.append((win[0]["url"], win[0]["filename"], int(win[0].get("size") or 0)))
+        wheels.append((pick["url"], pick["filename"], int(pick.get("size") or 0)))
     return wheels
 
 
