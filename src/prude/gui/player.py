@@ -48,12 +48,14 @@ class Player(QWidget):
         lay.addWidget(self.screen, 1)
 
         bar = QHBoxLayout()
-        self.play_btn = button("▶", "Icon", self.toggle, tip="Play / pause (space)")
+        self.play_btn = button("▶", None, self.toggle, tip="Play / pause")
+        self.play_btn.setStyleSheet("padding: 4px 6px;")
         self.play_btn.setFixedWidth(52)
         bar.addWidget(self.play_btn)
-        for txt, d, tip in (("−10s", -10, "Back 10 seconds"), ("+10s", 10, "Forward 10 seconds")):
-            b = button(txt, "Icon", lambda _=False, d=d: self.jump(d), tip=tip)
-            b.setMinimumWidth(62)
+        for txt, d, tip in (("« 10s", -10, "Back 10 seconds"), ("10s »", 10, "Forward 10 seconds")):
+            b = button(txt, None, lambda _=False, d=d: self.jump(d), tip=tip)
+            b.setStyleSheet("padding: 4px 6px;")
+            b.setFixedWidth(64)
             bar.addWidget(b)
         self.time = label("0:00:00 / 0:00:00", "Muted")
         bar.addWidget(self.time)
