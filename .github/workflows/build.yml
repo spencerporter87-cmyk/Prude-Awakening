@@ -63,6 +63,12 @@ jobs:
           if ($p.ExitCode -ne 0) { throw "self-test failed" }
           $p = Start-Process dist/PrudeAwakening/PrudeAwakening.exe -ArgumentList "--tour","$PWD/out/screens-packaged","--video","`"$PWD/out/e2e/e2e movie.mkv`"" -PassThru -Wait
           Get-ChildItem out/screens-packaged
+          $mv = "$PWD/out/e2e/packaged test.mkv"; Copy-Item "out/e2e/e2e movie.mkv" $mv
+          $p = Start-Process dist/PrudeAwakening/PrudeAwakening.exe -PassThru -Wait -ArgumentList "--cli","`"$mv`"","--words","strong,blasphemy,mild","--model","tiny.en","--device","cpu","--scenes","nudity,violence","--describe","`"a colorful television test pattern`"","--action","cut","--models-dir","`"$PWD/out/models`"","--summary-json","`"$PWD/out/packaged-summary.json`""
+          if ($p.ExitCode -ne 0) { throw "packaged scan failed $($p.ExitCode)" }
+          $j = Get-Content out/packaged-summary.json | ConvertFrom-Json
+          Write-Host "Packaged app found $($j.mutes.Count) mutes, $($j.scenes.Count) scenes -> $($j.result.output) ($($j.result.how))"
+          if ($j.mutes.Count -lt 2 -or -not (Test-Path $j.result.output)) { throw "packaged scan gave wrong results" }
           $size = (Get-ChildItem dist/PrudeAwakening -Recurse | Measure-Object Length -Sum).Sum / 1MB
           Write-Host ("Packaged app size: {0:N0} MB" -f $size)
 
@@ -93,6 +99,7 @@ jobs:
             out/e2e/*.json
             out/e2e/*.srt
             out/selftest.json
+            out/packaged-summary.json
           retention-days: 14
 
       - name: Save screenshots and results to the ci-results branch
@@ -100,7 +107,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force ci-results | Out-Null
-          foreach ($p in "out/screens","out/screens-packaged","out/selftest.json","out/e2e/e2e-summary.json","out/e2e/*.srt") {
+          foreach ($p in "out/screens","out/screens-packaged","out/selftest.json","out/packaged-summary.json","out/e2e/e2e-summary.json","out/e2e/*.srt") {
             if (Test-Path $p) { Copy-Item $p ci-results -Recurse -Force } }
           Set-Location ci-results
           git init -q -b ci-results

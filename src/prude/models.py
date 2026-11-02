@@ -191,8 +191,27 @@ def gpu_pack_dir(models_dir) -> Path:
     return Path(models_dir) / "gpu"
 
 
+def existing_cuda_dirs():
+    """NVIDIA DLL folders already on this PC (e.g. from pip installs of nvidia-cublas/cudnn)."""
+    roots = []
+    la = os.environ.get("LOCALAPPDATA")
+    if la:
+        roots += glob.glob(os.path.join(la, "Programs", "Python", "Python3*", "Lib", "site-packages"))
+    roots += glob.glob(os.path.join(os.environ.get("APPDATA", ""), "Python", "Python3*", "site-packages"))
+    roots += glob.glob(r"C:\Program Files\Python3*\Lib\site-packages")
+    dirs = []
+    for r in roots:
+        dirs += glob.glob(os.path.join(r, "nvidia", "*", "bin"))
+    return [Path(d) for d in dirs]
+
+
+def _has_cuda_libs(dirs):
+    names = {p.name.lower() for d in dirs if Path(d).is_dir() for p in Path(d).glob("*.dll")}
+    return any(n.startswith("cublas64_12") for n in names) and any(n.startswith("cudnn64_9") for n in names)
+
+
 def gpu_pack_ready(models_dir) -> bool:
-    return (gpu_pack_dir(models_dir) / ".complete").exists()
+    return (gpu_pack_dir(models_dir) / ".complete").exists() or _has_cuda_libs(existing_cuda_dirs())
 
 
 GPU_MAJOR = {"nvidia-cublas-cu12": "12.", "nvidia-cudnn-cu12": "9.", "nvidia-cuda-runtime-cu12": "12."}
@@ -255,7 +274,7 @@ def add_gpu_dll_dirs(models_dir):
     """Make the GPU pack (and any pip-installed NVIDIA libs) visible to CTranslate2."""
     if os.name != "nt":
         return
-    dirs = [gpu_pack_dir(models_dir)]
+    dirs = [gpu_pack_dir(models_dir)] + existing_cuda_dirs()
     try:
         import site
         for root in list(site.getsitepackages()) + [site.getusersitepackages()]:

@@ -48,6 +48,9 @@ QTabBar::tab {{ background: transparent; padding: 8px 18px; margin-right: 4px; c
 QTabBar::tab:selected {{ color: {INK}; border-bottom-color: {TEAL}; }}
 QTableWidget {{ background: white; border: none; gridline-color: #F1EADF; selection-background-color: #E3F0F2;
                 selection-color: {INK}; alternate-background-color: #FCFAF6; }}
+QTableView::indicator {{ width: 18px; height: 18px; border: 1.5px solid #B8A99A; border-radius: 5px;
+                         background: white; }}
+QTableView::indicator:checked {{ background: {TEAL}; border-color: {TEAL}; }}
 QHeaderView::section {{ background: #F7F1E8; border: none; border-bottom: 1px solid {LINE};
                         padding: 6px 8px; font-weight: 600; color: {MUTED}; }}
 QScrollArea {{ border: none; background: transparent; }}

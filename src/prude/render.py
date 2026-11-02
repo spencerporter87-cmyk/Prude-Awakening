@@ -6,8 +6,8 @@
 
 from pathlib import Path
 
-from .media import (LANG3, LANG_NAMES, TEXT_SUB_CODECS, channel_layouts, encoder_works, encoders,
-                    ffmpeg, ffmpeg_major_version, run_ffmpeg, stream_bitrate)
+from .media import (LANG3, LANG_NAMES, TEXT_SUB_CODECS, MediaError, channel_layouts, encoder_works,
+                    encoders, ffmpeg, ffmpeg_major_version, run_ffmpeg, stream_bitrate)
 from .subtitles import (clean_cues, extract_text_sub, generate_cues, read_srt, shift_cues,
                         write_srt)
 
@@ -72,7 +72,7 @@ def video_encoder_args(info, quality="high", device="auto"):
     if device != "cpu" and encoder_works("hevc_nvenc"):
         cq = "16" if quality == "max" else "19"
         args = ["-c:v", "hevc_nvenc", "-preset", "p6", "-tune", "hq", "-rc", "vbr", "-cq", cq,
-                "-b:v", "0", "-spatial-aq", "1", "-bf", "3"]
+                "-b:v", "0", "-spatial-aq", "1"]
         args += ["-profile:v", "main10", "-pix_fmt", "p010le"] if tenbit else ["-pix_fmt", "yuv420p"]
         return args + color, "graphics card (NVENC HEVC)"
     if "libx265" in encoders() and (tenbit or info.is_hdr):
@@ -131,6 +131,17 @@ def build_video_chain(blackouts, cuts):
 def render(info, project, filters, settings, patterns, out: Path, progress=None, cancel=None,
            log=print):
     """Returns a dict summary. filters: FilterOptions; settings: Settings."""
+    try:
+        return _render(info, project, filters, settings, patterns, out, progress, cancel, log,
+                       settings.device)
+    except MediaError as e:
+        if settings.device == "cpu" or not project.active_scenes() or (cancel is not None and cancel.is_set()):
+            raise
+        log(f"Graphics card video encoding failed ({str(e)[-300:]}); retrying on the processor.")
+        return _render(info, project, filters, settings, patterns, out, progress, cancel, log, "cpu")
+
+
+def _render(info, project, filters, settings, patterns, out, progress, cancel, log, device):
     track = project.audio_track
     st = info.audio[track].raw
     out = Path(out)
@@ -204,7 +215,7 @@ def render(info, project, filters, settings, patterns, out: Path, progress=None,
     how = "video copied untouched"
     vcodec = info.video.get("codec_name")
     if vgraph:
-        vargs, enc = video_encoder_args(info, settings.video_quality, settings.device)
+        vargs, enc = video_encoder_args(info, settings.video_quality, device)
         cmd += vargs
         how = f"video re-encoded on the {enc}"
         vcodec = "h264" if "libx264" in vargs else "hevc"

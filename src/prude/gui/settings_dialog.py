@@ -30,7 +30,7 @@ class SettingsDialog(QDialog):
     def __init__(self, settings, parent=None, gpu_present=False, on_gpu_pack=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.setMinimumWidth(640)
+        self.setMinimumWidth(820)
         self.s = settings
         lay = QVBoxLayout(self)
         lay.setContentsMargins(24, 20, 24, 20)
@@ -48,6 +48,7 @@ class SettingsDialog(QDialog):
         self.space = label("", "Small")
         self.mdir.textChanged.connect(self._space)
         col = QVBoxLayout()
+        col.setContentsMargins(0, 0, 0, 0)
         col.addWidget(self._with_browse(self.mdir))
         col.addWidget(self.space)
         w = QWidget()
@@ -73,7 +74,7 @@ class SettingsDialog(QDialog):
         self.quality.setCurrentIndex(max(0, self.quality.findData(settings.video_quality)))
         form.addRow("Video quality when re-encoding", self.quality)
 
-        self.keep_subs = QCheckBox("Keep the movie's subtitles (cleaned with ★★★★)")
+        self.keep_subs = QCheckBox("Keep the movie's subtitles (bad words become ****)")
         self.keep_subs.setChecked(settings.keep_subtitles)
         self.make_subs = QCheckBox("Add subtitles written from the dialogue")
         self.make_subs.setChecked(settings.make_subtitles)
@@ -83,6 +84,7 @@ class SettingsDialog(QDialog):
             form.addRow("", c)
 
         gpu = QHBoxLayout()
+        gpu.setContentsMargins(0, 0, 0, 0)
         if not gpu_present:
             gpu.addWidget(label("No NVIDIA graphics card found — everything runs on the processor.", "Muted"))
         elif models.gpu_pack_ready(settings.models_path):
@@ -97,6 +99,7 @@ class SettingsDialog(QDialog):
         form.addRow("Graphics card speed-up pack", gw)
 
         cache = QHBoxLayout()
+        cache.setContentsMargins(0, 0, 0, 0)
         self.cache_lbl = label(f"{folder_size_gb(projects_dir()):.2f} GB used by saved scans", "Muted")
         cache.addWidget(self.cache_lbl)
         cache.addWidget(button("Clear saved scans", None, self._clear_cache))

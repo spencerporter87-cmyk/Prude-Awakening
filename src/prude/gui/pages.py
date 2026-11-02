@@ -149,7 +149,7 @@ class SetupPage(QWidget):
         outer.addWidget(scroll, 1)
 
         # ---- language card
-        lang = Card("Language", "Words to silence. Subtitles get ★★★★ in their place.")
+        lang = Card("Language", "Words to silence. In subtitles they become ****.")
         self.word_boxes = {}
         for key, name, desc in CATEGORIES:
             cb = QCheckBox(name)
@@ -546,6 +546,7 @@ class ReviewPage(QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.verticalHeader().setDefaultSectionSize(40)
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(1, QHeaderView.ResizeToContents)
@@ -612,7 +613,7 @@ class ReviewPage(QWidget):
             cat = "Added by you" if m.get("manual") else CATEGORY_NAMES.get(m.get("category"), "")
             self.table.setItem(r, 3, QTableWidgetItem(cat))
             self.table.setItem(r, 4, QTableWidgetItem(m.get("context", "")))
-            b = button("▶", "Icon", lambda _=False, m=m: play_clip(self.project.source, m["start"], m["end"],
+            b = button("▶ Play", "Link", lambda _=False, m=m: play_clip(self.project.source, m["start"], m["end"],
                                                                    m.get("words", "")), tip="Hear it in the original")
             self.table.setCellWidget(r, 5, b)
         self.table.blockSignals(False)
