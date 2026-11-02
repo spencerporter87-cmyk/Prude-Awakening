@@ -17,18 +17,21 @@ from prude import models  # noqa: E402
 from prude.cli import main as cli  # noqa: E402
 from prude.media import ffmpeg, probe  # noqa: E402
 
-SPEECH = ("Hello there, my friend. <silence msec='700'/> What the hell are you doing? "
-          "<silence msec='700'/> I said, god damn it. <silence msec='700'/> "
-          "That is some bullshit. <silence msec='700'/> Have a wonderful day.")
+SENTENCES = ["Hello there, my friend.", "What the hell are you doing?", "I said, god damn it.",
+             "That is some bullshit.", "Have a wonderful day."]
 
 
 def tts(wav: Path):
+    parts = "\n".join(f'$p.AppendText("{t}"); $p.AppendBreak([TimeSpan]::FromMilliseconds(800))'
+                      for t in SENTENCES)
     ps = f"""
 Add-Type -AssemblyName System.Speech
 $s = New-Object System.Speech.Synthesis.SpeechSynthesizer
 $s.Rate = -1
+$p = New-Object System.Speech.Synthesis.PromptBuilder
+{parts}
 $s.SetOutputToWaveFile('{wav}')
-$s.SpeakSsml("<speak version='1.0' xml:lang='en-US'>{SPEECH}</speak>")
+$s.Speak($p)
 $s.Dispose()
 """
     subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=True)
