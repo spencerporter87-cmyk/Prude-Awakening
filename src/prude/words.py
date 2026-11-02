@@ -30,20 +30,36 @@ def normalize(word: str) -> str:
     return w.strip("'")
 
 
-def category_words(key: str) -> list:
+def category_groups(key: str) -> list:
+    """[(label, [patterns])] for a category. File lines: 'label: pat, pat' or a bare pattern."""
     path = DATA_DIR / "words" / f"{key}.txt"
     out = []
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.split("#", 1)[0].strip()
-        if line:
-            out.append(line)
+        if not line:
+            continue
+        if ":" in line:
+            label, pats = line.split(":", 1)
+            pats = [p.strip() for p in pats.split(",") if p.strip()]
+        else:
+            label, pats = line, [line]
+        out.append((label.strip(), pats))
     return out
 
 
-def build_patterns(categories, custom_text="", allow_text="") -> list:
-    """categories: iterable of category keys. custom_text: one word/phrase per line
-    (or comma separated). allow_text: words to never filter."""
+def group_key(category, label):
+    return f"{category}:{label}"
+
+
+def category_words(key: str) -> list:
+    return [p for _label, pats in category_groups(key) for p in pats]
+
+
+def build_patterns(categories, custom_text="", allow_text="", excluded=()) -> list:
+    """categories: category keys switched on. excluded: group keys ("strong:shit") switched off.
+    custom_text: one word/phrase per line (or comma separated). allow_text: never filter."""
     allow = {normalize(w) for w in re.split(r"[\n,]+", allow_text or "") if normalize(w)}
+    excluded = set(excluded or ())
     seen, patterns = set(), []
 
     def add(line, cat):
@@ -59,8 +75,11 @@ def build_patterns(categories, custom_text="", allow_text="") -> list:
     for line in re.split(r"[\n,]+", custom_text or ""):
         add(line.strip(), "custom")
     for cat in categories:
-        for line in category_words(cat):
-            add(line, cat)
+        for label, pats in category_groups(cat):
+            if group_key(cat, label) in excluded:
+                continue
+            for line in pats:
+                add(line, cat)
     patterns.sort(key=lambda p: -len(p.tokens))  # longest phrase wins
     return patterns
 

@@ -9,6 +9,7 @@ from .paths import app_data_dir, default_models_dir
 @dataclass
 class FilterOptions:
     words: list = field(default_factory=lambda: ["strong", "blasphemy", "sexual", "slurs"])
+    excluded_words: list = field(default_factory=list)   # group keys switched off, e.g. "strong:shit"
     custom_words: str = ""
     allow_words: str = ""
     padding: float = 0.15

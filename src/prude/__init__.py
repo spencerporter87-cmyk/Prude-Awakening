@@ -2,4 +2,4 @@
 
 APP_NAME = "Prude Awakening"
 APP_ID = "PrudeAwakening"
-__version__ = "2.1.0"
+__version__ = "2.2.0"

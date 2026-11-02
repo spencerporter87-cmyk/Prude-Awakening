@@ -200,3 +200,23 @@ def test_numpy_scene_times_save(media_dir, fake_words):
     p.scenes = [{"start": np.float32(1.5), "end": np.float64(2.5), "score": np.float32(0.7), "on": True}]
     p.save()
     assert json.loads((p.dir / "project.json").read_text())["scenes"][0]["start"] == 1.5
+
+
+def test_word_groups_can_be_switched_off():
+    from prude.words import category_groups
+    labels = [g[0] for g in category_groups("strong")]
+    assert "shit" in labels and "bullshit" in labels
+    words = [{"w": w, "s": i, "e": i + 0.4, "p": 1} for i, w in
+             enumerate(["oh", "shit", "that's", "bullshit", "you", "shithead"])]
+    pats = build_patterns(["strong"], excluded=["strong:shit"])
+    found = {h["words"] for h in find_matches(words, pats)}
+    assert found == {"bullshit"}
+    pats = build_patterns(["strong"], excluded=["strong:bullshit"])
+    assert {h["words"] for h in find_matches(words, pats)} == {"shit", "shithead"}
+
+
+def test_every_group_parses():
+    from prude.words import CATEGORIES, category_groups
+    for key, _n, _d in CATEGORIES:
+        groups = category_groups(key)
+        assert groups and all(label and pats for label, pats in groups)

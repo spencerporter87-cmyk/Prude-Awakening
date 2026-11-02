@@ -1,47 +1,20 @@
 # Sexual words and references
-sex
-sexy
-sexual
-horny
-blowjob*
-blow job*
-handjob*
-hand job*
-boner*
-hard-on
-hardon
-jerk off
-jerking off
-jack off
-jacking off
-masturbat*
-orgasm*
-cum
-cumming
-dildo*
-vibrator*
-porn*
-tits
-titties
-titty
-boob
-boobs
-boobies
-nipple*
-penis*
-vagina*
-testicle*
-balls deep
-erection*
-screw her
-screw him
-screwing
-banging her
-bang her
-get laid
-hooker*
-whore*
-slut*
-skank*
-threesome*
-anal
+sex / sexy: sex, sexy, sexual
+horny: horny
+tits / boobs: tits, titties, titty, boob, boobs, boobies
+nipple: nipple*
+penis: penis*
+vagina: vagina*
+testicles / balls deep: testicle*, balls deep
+boner / erection: boner*, hard-on, hardon, erection*
+blowjob: blowjob*, blow job*
+handjob: handjob*, hand job*
+jerk off / masturbate: jerk off, jerking off, jack off, jacking off, masturbat*
+orgasm / cum: orgasm*, cum, cumming
+screwing / banging: screw her, screw him, screwing, banging her, bang her
+porn: porn*
+dildo / vibrator: dildo*, vibrator*
+whore / hooker: whore*, hooker*
+slut / skank: slut*, skank*
+threesome: threesome*
+anal: anal

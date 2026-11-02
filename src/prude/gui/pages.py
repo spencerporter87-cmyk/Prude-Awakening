@@ -22,6 +22,7 @@ from ..words import CATEGORIES, CATEGORY_NAMES
 from ..render import merge_ranges
 from ..subtitles import TimeMap
 from .player import HAVE_MM, Player
+from .wordpicker import WordCategory
 from .widgets import (Card, DropZone, StageRow, TimeEdit, button, fmt_time, icon_pixmap, label)
 
 
@@ -153,17 +154,22 @@ class SetupPage(QWidget):
         outer.addWidget(scroll, 1)
 
         # ---- language card
-        lang = Card("Language", "Words to silence. In subtitles they become ****.")
-        self.word_boxes = {}
+        lang = Card()
+        lh = QHBoxLayout()
+        lh.addWidget(label("Language", "H2"))
+        lh.addStretch()
+        lh.addWidget(button("Select all", "Link", lambda: self._all_words(True)))
+        lh.addWidget(label("·", "Muted"))
+        lh.addWidget(button("Select none", "Link", lambda: self._all_words(False)))
+        lang.lay.addLayout(lh)
+        lang.lay.addWidget(label("Words to silence (in subtitles they become ****). "
+                                 "Click ▸ Words to pick individual words.", "Muted", wrap=True))
+        self.cats = {}
         for key, name, desc in CATEGORIES:
-            cb = QCheckBox(name)
-            cb.setToolTip(desc)
-            cb.toggled.connect(self._changed)
-            self.word_boxes[key] = cb
-            row = QHBoxLayout()
-            row.addWidget(cb)
-            row.addWidget(label(desc, "Small"), 1)
-            lang.lay.addLayout(row)
+            wc = WordCategory(key, name, desc, masked=(key == "slurs"))
+            wc.changed.connect(self._changed)
+            self.cats[key] = wc
+            lang.lay.addWidget(wc)
         lang.lay.addSpacing(6)
         lang.lay.addWidget(label("Your own words to silence (one per line)", None))
         self.custom = QPlainTextEdit()
@@ -285,8 +291,9 @@ class SetupPage(QWidget):
     def apply(self, f: FilterOptions):
         was = self._loading
         self._loading = True
-        for k, cb in self.word_boxes.items():
-            cb.setChecked(k in f.words)
+        excluded = set(f.excluded_words or [])
+        for k, wc in self.cats.items():
+            wc.set_state(k in f.words, excluded)
         self.custom.setPlainText(f.custom_words)
         self.allow.setText(f.allow_words)
         self.pad.setValue(int(round(f.padding * 100)))
@@ -303,7 +310,8 @@ class SetupPage(QWidget):
 
     def filters(self) -> FilterOptions:
         return FilterOptions(
-            words=[k for k, cb in self.word_boxes.items() if cb.isChecked()],
+            words=[k for k, wc in self.cats.items() if wc.enabled()],
+            excluded_words=[x for wc in self.cats.values() for x in wc.excluded()],
             custom_words=self.custom.toPlainText().strip(),
             allow_words=self.allow.text().strip(),
             padding=self.pad.value() / 100,
@@ -312,6 +320,14 @@ class SetupPage(QWidget):
             scene_descriptions=self.describe.toPlainText().strip(),
             sensitivity=self.sens.value(),
             scene_action="black" if self.act_black.isChecked() else "cut")
+
+    def _all_words(self, on):
+        was = self._loading
+        self._loading = True
+        for wc in self.cats.values():
+            wc.set_all(on)
+        self._loading = was
+        self._changed()
 
     def preset_name(self):
         return self.preset.currentText()

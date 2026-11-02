@@ -38,6 +38,14 @@ def run_tour(app, out_dir: Path, video=None):
                      w.setup.describe.setPlainText("smoking a cigarette\na person vomiting")))
         add(lambda: shot("2-setup"))
 
+        def open_words():
+            w.setup.cats["strong"].toggle()
+            w.setup.cats["strong"].words["strong:shit"].setChecked(False)
+            w.setup.cats["strong"].words["strong:piss"].setChecked(False)
+            w.setup.cats["blasphemy"].toggle()
+        add(open_words, 600)
+        add(lambda: shot("2b-setup-words"))
+
         def fake_scan():
             w.scanp.start(Path(video).name, ["audio", "speech", "words", "frames", "analyze"])
             w.stack.setCurrentWidget(w.scanp)

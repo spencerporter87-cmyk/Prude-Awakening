@@ -1,22 +1,11 @@
 # Mild language
-damn*
-dammit
-damnit
-hell
-hellhole
-crap*
-ass
-asses
-arse
-bloody
-screw you
-screw it
-freaking
-frickin*
-friggin*
-sucks
-suck it
-butt
-butthead*
-douche*
-bitchy
+damn: damn*, dammit, damnit
+hell: hell, hellhole
+crap: crap*
+ass: ass, asses, arse
+butt: butt, butthead*
+bloody: bloody
+screw you: screw you, screw it
+freaking: freaking, frickin*, friggin*
+sucks: sucks, suck it
+douche: douche*

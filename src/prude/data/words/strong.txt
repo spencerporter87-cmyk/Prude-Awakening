@@ -1,43 +1,17 @@
-# Strong language
-fuck*
-*fucker*
-*fucking*
-motherf*
-mother fucker*
-effing
-shit*
-*shit
-*shits
-*shitty
-shithead*
-bullshit*
-horseshit*
-dipshit*
-apeshit
-batshit
-chickenshit
-cunt*
-cock
-cocks
-cocksucker*
-dick
-dicks
-dickhead*
-prick
-pricks
-pussy
-pussies
-twat*
-wank*
-bitch*
-sonofabitch*
-son of a bitch*
-bastard*
-asshole*
-arsehole*
-dumbass*
-jackass*
-smartass*
-badass*
-kiss my ass
-piss*
+# Strong language.  Format:  label: pattern, pattern, ...   (* = any letters)
+fuck: fuck*, *fucker*, *fucking*, motherf*, mother fucker*, effing
+shit: shit*, *shits, *shitty, shithead*
+bullshit: bullshit*, horseshit*, dipshit*, apeshit, batshit, chickenshit
+bitch: bitch*
+son of a bitch: sonofabitch*, son of a bitch*
+bastard: bastard*
+asshole: asshole*, arsehole*
+dumbass / jackass / smartass: dumbass*, jackass*, smartass*, badass*, kiss my ass
+piss: piss*
+dick: dick, dicks, dickhead*
+cock: cock, cocks, cocksucker*
+prick: prick, pricks
+pussy: pussy, pussies
+cunt: cunt*
+twat: twat*
+wanker: wank*

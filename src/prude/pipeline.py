@@ -41,7 +41,8 @@ def _carry_over(new, old):
 
 
 def patterns_for(filters):
-    return build_patterns(filters.words, filters.custom_words, filters.allow_words)
+    return build_patterns(filters.words, filters.custom_words, filters.allow_words,
+                          getattr(filters, "excluded_words", ()))
 
 
 def find_word_mutes(project, filters):

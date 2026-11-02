@@ -1,28 +1,13 @@
-# Slurs (racial, ethnic and anti-gay)
-nigger*
-nigga*
-negro*
-spic
-spics
-wetback*
-chink*
-gook*
-jap
-japs
-kike*
-raghead*
-towelhead*
-beaner*
-honky
-honkies
-redskin*
-squaw*
-faggot*
-fag
-fags
-dyke*
-tranny
-trannies
-retard
-retards
-retarded
+# Slurs (labels are masked on screen)
+N-word (n****r / n***a): nigger*, nigga*
+negro: negro*
+f-slur (f****t / fag): faggot*, fag, fags
+d*ke: dyke*
+tr*nny: tranny, trannies
+r-word (retard): retard, retards, retarded
+sp*c / w*tback / b**ner: spic, spics, wetback*, beaner*
+ch*nk / g**k / j*p: chink*, gook*, jap, japs
+k*ke: kike*
+r*ghead / t*welhead: raghead*, towelhead*
+h*nky: honky, honkies
+r*dskin / sq**w: redskin*, squaw*
