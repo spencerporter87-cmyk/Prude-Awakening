@@ -1,0 +1,8 @@
+faster-whisper>=1.1
+PySide6-Essentials>=6.7
+nudenet>=3.4
+onnxruntime>=1.18
+opencv-python-headless>=4.9
+numpy>=1.26
+requests>=2.31
+tokenizers>=0.15

@@ -1,0 +1,67 @@
+"""One movie's work: its transcript, the mutes and scenes found, and your choices.
+Kept in the app data folder so the movie's own folder only gets the clean copy."""
+
+import hashlib
+import json
+import shutil
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+
+from .paths import projects_dir
+
+
+def project_key(path: Path) -> str:
+    st = path.stat()
+    h = hashlib.sha1(f"{path.resolve()}|{st.st_size}|{int(st.st_mtime)}".encode("utf-8"))
+    return h.hexdigest()[:16]
+
+
+@dataclass
+class Project:
+    source: str
+    audio_track: int = 0
+    language: str = "en"
+    transcript: dict = field(default_factory=dict)      # {"track", "model", "words": [...]}
+    mutes: list = field(default_factory=list)           # {id,start,end,words,context,category,on,manual}
+    scenes: list = field(default_factory=list)          # {id,start,end,kind,label,score,thumb,on}
+    scan_filters: dict = field(default_factory=dict)
+    last_output: str = ""
+
+    @property
+    def dir(self) -> Path:
+        d = projects_dir() / project_key(Path(self.source))
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def save(self):
+        (self.dir / "project.json").write_text(json.dumps(asdict(self)), encoding="utf-8")
+
+    @classmethod
+    def open(cls, source) -> "Project":
+        source = str(Path(source).resolve())
+        p = projects_dir() / project_key(Path(source)) / "project.json"
+        if p.exists():
+            try:
+                d = json.loads(p.read_text(encoding="utf-8"))
+                d["source"] = source
+                return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+            except Exception:
+                pass
+        return cls(source=source)
+
+    def has_transcript(self, track) -> bool:
+        return bool(self.transcript.get("words")) and self.transcript.get("track") == track
+
+    def clear_cache(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def active_mutes(self):
+        return [m for m in self.mutes if m.get("on", True)]
+
+    def active_scenes(self):
+        return [s for s in self.scenes if s.get("on", True)]
+
+    def export_edits(self, path):
+        """Human-readable list (for people who like editing in Notepad)."""
+        Path(path).write_text(json.dumps({"mutes": self.mutes, "scenes": self.scenes}, indent=1),
+                              encoding="utf-8")
