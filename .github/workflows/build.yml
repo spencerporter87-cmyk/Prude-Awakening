@@ -95,6 +95,27 @@ jobs:
             out/selftest.json
           retention-days: 14
 
+      - name: Save screenshots and results to the ci-results branch
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force ci-results | Out-Null
+          foreach ($p in "out/screens","out/screens-packaged","out/selftest.json","out/e2e/e2e-summary.json","out/e2e/*.srt") {
+            if (Test-Path $p) { Copy-Item $p ci-results -Recurse -Force } }
+          Set-Location ci-results
+          git init -q -b ci-results
+          git config user.name "build-bot"; git config user.email "build-bot@users.noreply.github.com"
+          git add -A; git commit -qm "Results for $env:GITHUB_SHA"
+          git push -f -q "https://x-access-token:$env:GH_TOKEN@github.com/$env:GITHUB_REPOSITORY" ci-results
+
+      - name: Publish "Latest build" download
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        run: |
+          gh release delete latest-build --cleanup-tag -y 2>$null
+          $f = Get-ChildItem dist/Prude-Awakening-Setup-*.exe | Select-Object -First 1
+          gh release create latest-build $f.FullName --prerelease --target $env:GITHUB_SHA --title "Latest build" --notes "Automatic build of the newest code. Download Prude-Awakening-Setup below and run it."
+
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
