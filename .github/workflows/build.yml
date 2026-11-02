@@ -1,0 +1,102 @@
+name: Build and test (Windows)
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      PYTHONUTF8: "1"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Python packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller pytest
+
+      - name: Get FFmpeg
+        shell: pwsh
+        run: ./packaging/get_ffmpeg.ps1
+
+      - name: Cache AI models
+        uses: actions/cache@v4
+        with:
+          path: out/models
+          key: models-v1
+
+      - name: Unit tests
+        run: python -m pytest tests -q
+
+      - name: End-to-end test (real speech, real models)
+        run: python tests/e2e_windows.py out/e2e
+
+      - name: Screenshot tour (from source)
+        shell: pwsh
+        run: |
+          $p = Start-Process python -ArgumentList "-m","prude.gui","--tour","`"$PWD/out/screens`"","--video","`"$PWD/out/e2e/e2e movie.mkv`"" -WorkingDirectory src -PassThru -Wait -NoNewWindow
+          Get-ChildItem out/screens
+          if ($p.ExitCode -ne 0) { throw "tour failed $($p.ExitCode)" }
+
+      - name: Build PrudeAwakening.exe
+        run: pyinstaller packaging/prude.spec --noconfirm --distpath dist --workpath build
+
+      - name: Self-test the packaged app
+        shell: pwsh
+        run: |
+          $p = Start-Process dist/PrudeAwakening/PrudeAwakening.exe -ArgumentList "--self-test","$PWD/out/selftest.json" -PassThru -Wait
+          Get-Content out/selftest.json
+          if ($p.ExitCode -ne 0) { throw "self-test failed" }
+          $p = Start-Process dist/PrudeAwakening/PrudeAwakening.exe -ArgumentList "--tour","$PWD/out/screens-packaged","--video","`"$PWD/out/e2e/e2e movie.mkv`"" -PassThru -Wait
+          Get-ChildItem out/screens-packaged
+          $size = (Get-ChildItem dist/PrudeAwakening -Recurse | Measure-Object Length -Sum).Sum / 1MB
+          Write-Host ("Packaged app size: {0:N0} MB" -f $size)
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path src/prude/__init__.py -Pattern '__version__ = "(.+)"').Matches[0].Groups[1].Value
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; }
+          & $iscc "/DAppVersion=$v" packaging/installer.iss
+          Get-ChildItem dist/*.exe
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Prude-Awakening-Setup
+          path: dist/Prude-Awakening-Setup-*.exe
+          retention-days: 30
+
+      - name: Upload screenshots and test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screens-and-results
+          path: |
+            out/screens
+            out/screens-packaged
+            out/e2e/*.json
+            out/e2e/*.srt
+            out/selftest.json
+          retention-days: 14
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Prude-Awakening-Setup-*.exe

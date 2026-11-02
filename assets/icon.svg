@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <g stroke="#2A1B2E" stroke-width="14" stroke-linejoin="round" stroke-linecap="round">
+    <rect x="146" y="448" width="220" height="44" rx="10" fill="#DDD0BC"/>
+    <rect x="176" y="418" width="160" height="34" rx="6" fill="#F4EEE2"/>
+    <path d="M 84 422 C 80 330 136 296 212 288 L 220 238 L 292 238 L 300 288 C 376 296 432 330 428 422 Z" fill="#F4EEE2"/>
+    <circle cx="256" cy="70" r="30" fill="#DDD0BC"/>
+    <ellipse cx="256" cy="170" rx="70" ry="80" fill="#F4EEE2"/>
+    <path d="M 188 176 C 178 112 220 86 258 86 C 300 86 336 112 324 176 C 314 140 292 122 256 122 C 220 122 198 140 188 176 Z" fill="#DDD0BC"/>
+  </g>
+  <g stroke="#2A1B2E" stroke-width="9" stroke-linecap="round" fill="none">
+    <path d="M 112 396 C 118 352 156 326 198 330"/><path d="M 400 396 C 394 352 356 326 314 330"/>
+  </g>
+  <ellipse cx="212" cy="206" rx="17" ry="9" fill="#F2A3A0"/><ellipse cx="300" cy="206" rx="17" ry="9" fill="#F2A3A0"/>
+  <g stroke="#2A1B2E" stroke-width="9" stroke-linecap="round" fill="none">
+    <path d="M 214 182 Q 228 192 242 182"/><path d="M 270 182 Q 284 192 298 182"/>
+    <path d="M 256 190 L 252 212 L 262 214"/><path d="M 246 228 Q 256 233 266 228"/>
+  </g>
+  <g transform="translate(256 344) rotate(-6) scale(0.48) translate(-256 -240)">
+      <path d="M 256 410 C 210 410 160 396 136 370 C 100 372 74 350 80 322 C 86 300 120 296 150 302 C 110 284 66 248 70 206 C 74 170 120 168 160 196 C 166 206 172 214 176 222 C 168 170 186 110 222 82 C 240 68 272 68 290 82 C 326 110 344 170 336 222 C 340 214 346 206 352 196 C 392 168 438 170 442 206 C 446 248 402 284 362 302 C 392 296 426 300 432 322 C 438 350 412 372 376 370 C 352 396 302 410 256 410 Z" fill="#5DAA4A" stroke="#2A1B2E" stroke-width="26" stroke-linejoin="round"/>
+      <g stroke="#3C7A30" stroke-width="15" stroke-linecap="round" fill="none">
+        <path d="M 256 398 L 256 100"/>
+        <path d="M 256 350 Q 330 344 404 334"/><path d="M 256 350 Q 182 344 108 334"/>
+        <path d="M 256 300 Q 340 262 414 216"/><path d="M 256 300 Q 172 262 98 216"/>
+      </g></g>
+</svg>

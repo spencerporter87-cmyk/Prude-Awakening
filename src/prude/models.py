@@ -195,12 +195,8 @@ def gpu_pack_ready(models_dir) -> bool:
     return (gpu_pack_dir(models_dir) / ".complete").exists()
 
 
-def ensure_gpu_pack(models_dir, progress=None, cancel=None) -> Path:
-    """NVIDIA's CUDA libraries (cuBLAS, cuDNN) that speech recognition needs on the GPU.
-    Fetched from NVIDIA's official Python packages; only the DLLs are kept."""
-    target = gpu_pack_dir(models_dir)
-    if (target / ".complete").exists():
-        return target
+def gpu_pack_plan():
+    """[(url, filename, size)] of NVIDIA's Windows packages to fetch."""
     s = _session()
     wheels = []
     for pkg in GPU_WHEELS:
@@ -214,6 +210,16 @@ def ensure_gpu_pack(models_dir, progress=None, cancel=None) -> Path:
         if not win:
             raise DownloadError(f"No Windows package found for {pkg}.")
         wheels.append((win[0]["url"], win[0]["filename"], int(win[0].get("size") or 0)))
+    return wheels
+
+
+def ensure_gpu_pack(models_dir, progress=None, cancel=None) -> Path:
+    """NVIDIA's CUDA libraries (cuBLAS, cuDNN) that speech recognition needs on the GPU.
+    Fetched from NVIDIA's official Python packages; only the DLLs are kept."""
+    target = gpu_pack_dir(models_dir)
+    if (target / ".complete").exists():
+        return target
+    wheels = gpu_pack_plan()
     total = sum(w[2] for w in wheels)
     if free_space_gb(target) < total / 1e9 * 2 + 0.5:
         raise DownloadError(f"Not enough free space for the GPU pack in {target}.")

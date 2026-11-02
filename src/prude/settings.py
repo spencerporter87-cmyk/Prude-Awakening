@@ -49,6 +49,8 @@ class Settings:
     last_preset: str = "Family night"
     filters: dict = field(default_factory=lambda: asdict(BUILTIN_PRESETS["Family night"]))
     presets: dict = field(default_factory=dict)  # user presets name -> FilterOptions dict
+    recent: list = field(default_factory=list)
+    window: list = field(default_factory=list)   # x, y, w, h
 
     @property
     def models_path(self):
