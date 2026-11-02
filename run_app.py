@@ -14,7 +14,16 @@ if __name__ == "__main__":
         sys.stdout = sys.stdout or f
         sys.stderr = sys.stderr or f
     if len(sys.argv) > 1 and sys.argv[1] == "--cli":
-        from prude.cli import main as cli
-        sys.exit(cli(sys.argv[2:]))
+        import os
+        import traceback
+        code = 1
+        try:
+            from prude.cli import main as cli
+            code = cli(sys.argv[2:])
+        except BaseException:
+            traceback.print_exc()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(code or 0)   # don't wait on library threads at shutdown
     from prude.gui.main import main
     sys.exit(main())

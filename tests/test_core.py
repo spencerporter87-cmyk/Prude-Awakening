@@ -167,3 +167,22 @@ def test_rescan_keeps_choices(media_dir, fake_words):
     assert hell["on"] is False
     assert any(m.get("manual") for m in p.mutes)
     assert any(m["words"] == "shitty" for m in p.mutes)
+
+
+def test_cut_everything_is_refused(media_dir, fake_words, tmp_path):
+    from prude.media import MediaError
+    f = FilterOptions(words=["mild"], scene_action="cut")
+    p = _project(media_dir / "movie51.mkv", fake_words)
+    pipeline.find_word_mutes(p, f)
+    p.scenes = [{"id": "x", "kind": "violence", "label": "V", "start": 0.0, "end": 20.0, "on": True}]
+    with pytest.raises(MediaError):
+        pipeline.render_project(p, f, Settings(device="cpu"), tmp_path / "all.mkv")
+
+
+def test_cut_drops_empty_subtitles(media_dir, fake_words, tmp_path):
+    f = FilterOptions(words=["mild"], scene_action="cut")
+    p = _project(media_dir / "movie51.mkv", fake_words)
+    pipeline.find_word_mutes(p, f)
+    p.scenes = [{"id": "x", "kind": "violence", "label": "V", "start": 0.5, "end": 19.0, "on": True}]
+    res = pipeline.render_project(p, f, Settings(device="cpu"), tmp_path / "most.mkv")
+    assert Path(res["output"]).exists()

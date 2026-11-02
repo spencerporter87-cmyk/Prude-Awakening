@@ -154,6 +154,9 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
     cuts = scenes if filters.scene_action == "cut" else []
     blackouts = scenes if filters.scene_action != "cut" else []
     cut_total = sum(b - a for a, b in cuts)
+    if cuts and info.duration and info.duration - cut_total < 1.0:
+        raise MediaError("Every part of the movie is marked for removal, so nothing would be left. "
+                         "Untick some scenes and try again.")
 
     # ---- subtitles
     subs, notes = [], []   # subs: (path, lang, title, forced)
@@ -169,9 +172,11 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
                     if extract_text_sub(info.path, s["index"], tmp):
                         cues = read_srt(tmp)
                         starred += clean_cues(cues, patterns)
-                        write_srt(tmp, shift_cues(cues, cuts))
-                        subs.append((tmp, tags.get("language"), f"{label} (clean)",
-                                     bool(s.get("disposition", {}).get("forced"))))
+                        cues = shift_cues(cues, cuts)
+                        if cues:
+                            write_srt(tmp, cues)
+                            subs.append((tmp, tags.get("language"), f"{label} (clean)",
+                                         bool(s.get("disposition", {}).get("forced"))))
                         continue
                 notes.append(f"Left out picture-based subtitles ({label}) — they can't be edited.")
             if subs:
@@ -179,11 +184,12 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
         words = project.transcript.get("words") or []
         if settings.make_subtitles and words:
             side = out.with_name(f"{out.stem}.{project.language}.srt")
-            cues = generate_cues(words, project.active_mutes(), patterns)
-            write_srt(side, shift_cues(cues, cuts))
-            subs.append((side, LANG3.get(project.language, project.language),
-                         f"{'English' if project.language == 'en' else project.language} (Prude Awakening)", False))
-            notes.append(f"Made subtitles from the dialogue: {side.name}")
+            cues = shift_cues(generate_cues(words, project.active_mutes(), patterns), cuts)
+            if cues:
+                write_srt(side, cues)
+                subs.append((side, LANG3.get(project.language, project.language),
+                             f"{'English' if project.language == 'en' else project.language} (Prude Awakening)", False))
+                notes.append(f"Made subtitles from the dialogue: {side.name}")
 
     # ---- filter graph
     graph = build_audio_chain(info, track, mutes, blackouts, cuts, filters.mute_mode)
