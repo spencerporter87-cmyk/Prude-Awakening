@@ -39,6 +39,16 @@ class MainWindow(QMainWindow):
     def __init__(self, settings: Settings):
         super().__init__()
         self.settings = settings
+        if not settings.models_dir:
+            try:
+                from ..paths import roomiest_models_dir
+                better = roomiest_models_dir()
+                if better is not None:
+                    settings.models_dir = str(better)
+                    settings.save()
+                    log.info("Models folder set to %s (more free space than C:)", better)
+            except Exception:                                # noqa: BLE001
+                log.exception("Couldn't choose a models drive")
         self.project = None
         self.info = None
         self.worker = None
@@ -279,6 +289,8 @@ class MainWindow(QMainWindow):
         if get_gpu:
             stages.append("gpu")
         stages += ["audio", "speech", "words", "subs"]
+        if f.burned_subs == "on" or (f.burned_subs == "auto" and dialogue != "en"):
+            stages.append("burned")
         if want_scenes:
             if want_clip and not models.clip_ready(self.settings.models_path):
                 stages.append("models")

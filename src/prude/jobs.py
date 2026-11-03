@@ -20,7 +20,7 @@ STATUS_TEXT = {QUEUED: "Waiting", RUNNING: "Working", REVIEW: "Ready to review",
                FAILED: "Failed", CANCELLED: "Cancelled"}
 
 # how much of a job's progress bar each step takes (scan first, then saving)
-STAGE_SPAN = {"gpu": (0.0, 0.02), "audio": (0.0, 0.04), "speech": (0.04, 0.35), "words": (0.35, 0.355), "subs": (0.355, 0.36),
+STAGE_SPAN = {"gpu": (0.0, 0.02), "audio": (0.0, 0.04), "speech": (0.04, 0.35), "words": (0.35, 0.355), "subs": (0.355, 0.358), "burned": (0.358, 0.36),
               "models": (0.36, 0.38), "frames": (0.38, 0.48), "analyze": (0.48, 0.6), "render": (0.6, 1.0)}
 
 
@@ -187,7 +187,7 @@ def process_job(job, settings, progress=None, cancel=None, log=print):
         project.audio_track = pick_audio_track(info, project.language)
     f = FilterOptions.from_dict(job.filters)
     scan(project, f, settings, stage_progress, cancel, log)
-    subs_on = [x for x in project.subtitle_edits if x.get("on", True)]
+    subs_on = [x for x in project.subtitle_edits + project.burned_edits if x.get("on", True)]
     found = {"mutes": len(project.mutes), "scenes": len(project.scenes), "subtitle_words": len(subs_on)}
     if review_only:
         return dict(found, review=True)

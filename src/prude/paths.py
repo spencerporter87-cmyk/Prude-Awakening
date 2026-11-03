@@ -40,6 +40,39 @@ def default_models_dir() -> Path:
     return app_data_dir() / "models"
 
 
+def fixed_drives():
+    """Windows hard drives (C:\\, D:\\ ...) - not USB sticks, network or CD drives."""
+    if os.name != "nt":
+        return []
+    import ctypes
+    import string
+    out = []
+    for d in string.ascii_uppercase:
+        root = f"{d}:\\"
+        try:
+            if ctypes.windll.kernel32.GetDriveTypeW(root) == 3 and os.path.exists(root):
+                out.append(Path(root))
+        except Exception:                                   # noqa: BLE001
+            pass
+    return out
+
+
+def roomiest_models_dir(need_gb=15.0):
+    """First run: the AI models (a few GB) go on the drive with the most free space when the
+    usual place (on C:) is short of room. Returns None to keep the usual place."""
+    usual = default_models_dir()
+    if usual.exists() and any(usual.iterdir()):
+        return None                                         # already has models: leave them
+    here = free_space_gb(usual)
+    if here >= need_gb:
+        return None
+    best = max(((free_space_gb(d), d) for d in fixed_drives()), default=(0.0, None))
+    if best[1] is None or best[0] < max(need_gb, here * 2) or \
+            Path(best[1]).drive.lower() == Path(usual).drive.lower():
+        return None
+    return Path(best[1]) / "Prude Awakening Models"
+
+
 def find_tool(name: str) -> str:
     exe = name + (".exe" if os.name == "nt" else "")
     candidates = []

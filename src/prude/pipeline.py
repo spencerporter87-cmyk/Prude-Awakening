@@ -14,8 +14,9 @@ STAGES = [
     ("gpu", "Getting the graphics-card speed-up pack"),
     ("audio", "Pulling out the dialogue"),
     ("speech", "Listening for words"),
-    ("subs", "Reading the subtitles"),
     ("words", "Matching your word list"),
+    ("subs", "Reading the subtitles"),
+    ("burned", "Reading subtitles burned into the picture"),
     ("models", "Getting the scene model"),
     ("frames", "Watching the movie"),
     ("analyze", "Looking for scenes"),
@@ -36,7 +37,7 @@ def _text(item):
 
 def _match_score(n, o):
     """How likely a new finding is the same edit as an old one (0 = different)."""
-    if n.get("kind") == "subtitle" or o.get("kind") == "subtitle":
+    if n.get("kind") in ("subtitle", "burned") or o.get("kind") in ("subtitle", "burned"):
         same = n.get("norm") == o.get("norm") and abs(float(n["start"]) - float(o["start"])) <= 1.0
         return 2.0 if same else 0.0
     if "kind" in n or "kind" in o:                       # scenes
@@ -110,6 +111,36 @@ def dialogue_is_english(project):
     return project.english_share >= 0.25
 
 
+def _burned(project, info, filters, tracks, english, progress, cancel, log):
+    """Words in subtitles that are part of the picture (blurred when saving)."""
+    mode = getattr(filters, "burned_subs", "auto")
+    if mode == "off" or not info.video:
+        return [b for b in project.burned_edits if b.get("manual")]
+    if mode == "auto":
+        if english or any(t["cues"] for t in tracks):
+            return [b for b in project.burned_edits if b.get("manual")]
+        if project.burned_check is None:
+            from . import burnin
+            try:
+                if progress:
+                    progress(0.0, "Checking for subtitles burned into the picture")
+                project.burned_check = bool(burnin.has_text(info, cancel))
+            except ImportError as e:
+                log(f"Text recognition isn't available ({e}).")
+                return project.burned_edits
+            log("Subtitles burned into the picture: " + ("found" if project.burned_check else "none"))
+        if not project.burned_check:
+            return [b for b in project.burned_edits if b.get("manual")]
+    from . import burnin
+    try:
+        found = burnin.scan(info, patterns_for(filters), project.dir, progress, cancel, log)
+    except ImportError as e:
+        log(f"Text recognition isn't available ({e}); burned-in subtitles can't be read.")
+        return project.burned_edits
+    log(f"Burned-in subtitles: {len(found)} word(s) to cover.")
+    return _carry_over(found, project.burned_edits)
+
+
 def scan(project, filters, settings, progress=None, cancel=None, log=print, get_gpu_pack=False):
     """progress(stage, fraction, message)."""
     def p(stage):
@@ -173,6 +204,7 @@ def scan(project, filters, settings, progress=None, cancel=None, log=print, get_
     items, extra = subtitle_findings(tracks, patterns_for(filters), project.transcript.get("words"),
                                      project.mutes, english, filters.padding)
     project.subtitle_edits = _carry_over(items, project.subtitle_edits)
+    project.burned_edits = _burned(project, info, filters, tracks, english, p("burned"), cancel, log)
     if extra:
         find_word_mutes(project, filters, extra)
         log(f"Subtitles caught {sum(1 for e in extra if not e.get('unsure'))} missed word(s); "

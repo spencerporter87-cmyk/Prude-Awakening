@@ -84,13 +84,24 @@ class ExportDialog(QDialog):
         self.quality.setCurrentIndex(max(0, self.quality.findData(opts.quality)))
         form.addRow("Quality if re-encoding", self.quality)
 
+        self.fast = QCheckBox("Fast cuts: copy the picture instead of re-encoding when scenes are only cut")
+        self.fast.setToolTip("Saves in minutes with the original picture quality. Each cut lands on the next\n"
+                             "keyframe, so it can run on up to a few seconds longer than marked.\n"
+                             "Only used when every changed scene is cut (not blacked out or blurred).")
+        self.fast.setChecked(opts.fast_cuts)
+        form.addRow("", self.fast)
+        self.other = QCheckBox("Also keep the other audio tracks (other languages, commentary) - NOT filtered")
+        self.other.setChecked(opts.other_audio)
+        form.addRow("", self.other)
+
         self.preview = label("", "Muted", wrap=True)
         self.preview.setStyleSheet("background: #FFFFFF; border: 1px solid #E8DDCF; border-radius: 10px; padding: 10px;")
         lay.addWidget(self.preview)
 
         for sig in (self.folder.textChanged, self.edition.textChanged, self.own.toggled,
                     self.container.currentIndexChanged, self.res.currentIndexChanged,
-                    self.quality.currentIndexChanged, self.naming.buttonToggled):
+                    self.quality.currentIndexChanged, self.naming.buttonToggled, self.fast.toggled,
+                    self.other.toggled):
             sig.connect(self._refresh)
         bb = QDialogButtonBox(QDialogButtonBox.Cancel)
         self.ok = button("Save clean copy  →", "Primary", self.accept)
@@ -104,7 +115,8 @@ class ExportDialog(QDialog):
         return ExportOptions(folder=self.folder.text().strip(), container=self.container.currentData(),
                              resolution=self.res.currentData(), quality=self.quality.currentData(),
                              naming=naming, edition=self.edition.text().strip() or "Family Edit",
-                             own_folder=self.own.isChecked())
+                             own_folder=self.own.isChecked(), fast_cuts=self.fast.isChecked(),
+                             other_audio=self.other.isChecked())
 
     def output(self) -> Path:
         return output_path(self.src, self.options())

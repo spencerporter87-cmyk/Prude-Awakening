@@ -16,7 +16,7 @@ SCHEMA = 2
 def migrate(d: dict) -> dict:
     """Bring an older saved project up to the current layout without losing anything."""
     import uuid
-    for kind in ("mutes", "scenes", "subtitle_edits"):
+    for kind in ("mutes", "scenes", "subtitle_edits", "burned_edits"):
         for item in d.get(kind) or []:
             item.setdefault("id", uuid.uuid4().hex[:12])
             item.setdefault("on", True)
@@ -56,6 +56,8 @@ class Project:
     spoken_language: str = ""                             # detected, e.g. "en", "yua"
     english_share: float = 1.0
     lang_track: int = -1
+    burned_edits: list = field(default_factory=list)     # words in subtitles burned into the picture
+    burned_check: object = None                          # None = not checked; True/False
     schema: int = SCHEMA
 
     @property

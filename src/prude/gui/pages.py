@@ -194,6 +194,20 @@ class SetupPage(QWidget):
         srow.addWidget(self.star)
         srow.addStretch()
         lang.lay.addLayout(srow)
+        brow = QHBoxLayout()
+        brow.addWidget(label("Subtitles burned into the picture", None))
+        self.burned = QComboBox()
+        for text, key in (("Check foreign-language films", "auto"), ("Always check (slow)", "on"),
+                          ("Don't check", "off")):
+            self.burned.addItem(text, key)
+        self.burned.setToolTip("Some movies have the subtitles printed into the picture itself.\n"
+                               "Swear words there are blurred. Reading them takes a while (the whole\n"
+                               "movie is read), so by default it only happens for foreign-language\n"
+                               "films without subtitle tracks, after a quick check.")
+        self.burned.currentIndexChanged.connect(self._changed)
+        brow.addWidget(self.burned)
+        brow.addStretch()
+        lang.lay.addLayout(brow)
         self.cats = {}
         for key, name, desc in CATEGORIES:
             wc = WordCategory(key, name, desc, masked=(key == "slurs"))
@@ -230,6 +244,11 @@ class SetupPage(QWidget):
             g.addButton(r)
             r.toggled.connect(self._changed)
             lang.lay.addWidget(r)
+        self.fade = QCheckBox("Soften the edges of each silence (a 30 ms fade instead of a hard cut)")
+        self.fade.setToolTip("Off = like the commercial filters: sound stops exactly at the word.\n"
+                             "On = a tiny fade in and out, which can hide clicks with loud music.")
+        self.fade.toggled.connect(self._changed)
+        lang.lay.addWidget(self.fade)
         lang.lay.addStretch()
         grid.addWidget(lang, 0, 0)
 
@@ -300,7 +319,9 @@ class SetupPage(QWidget):
         self.pad.setValue(int(round(f.padding * 100)))
         self.pad_val.setText(f"{f.padding:.2f} s")
         (self.mute_center if f.mute_mode == "center" else self.mute_all).setChecked(True)
+        self.fade.setChecked(bool(f.mute_fade))
         self.star.setCurrentIndex(max(0, self.star.findData(f.star_style or "stars")))
+        self.burned.setCurrentIndex(max(0, self.burned.findData(f.burned_subs or "auto")))
         chosen = set(f.scenes)
         for g, sg in self.groups.items():
             sg.set_state(chosen, (f.scene_sensitivity or {}).get(g, f.sensitivity),
@@ -317,7 +338,9 @@ class SetupPage(QWidget):
             allow_words=self.allow.text().strip(),
             padding=self.pad.value() / 100,
             star_style=self.star.currentData() or "stars",
+            burned_subs=self.burned.currentData() or "auto",
             mute_mode="center" if self.mute_center.isChecked() else "all",
+            mute_fade=self.fade.isChecked(),
             scenes=[k for sg in self.groups.values() for k in sg.selected()],
             scene_descriptions=self.groups["custom"].text_value(),
             sensitivity=3,
@@ -666,9 +689,10 @@ class ReviewPage(QWidget):
     def _sub_rows(self):
         """Subtitle-only rows: shown when the dialogue isn't English (nothing to silence, only stars)."""
         from ..pipeline import dialogue_is_english
+        burned = list(getattr(self.project, "burned_edits", []) or [])
         if dialogue_is_english(self.project):
-            return []
-        return list(getattr(self.project, "subtitle_edits", []) or [])
+            return burned
+        return list(getattr(self.project, "subtitle_edits", []) or []) + burned
 
     def _fill_words(self):
         self.table.blockSignals(True)
@@ -683,12 +707,17 @@ class ReviewPage(QWidget):
             self.table.setItem(r, 0, chk)
             self.table.setItem(r, 1, QTableWidgetItem(fmt_time(m["start"])))
             cat = "Added by you" if m.get("manual") else CATEGORY_NAMES.get(m.get("category"), "")
-            if kind == "sub":
+            burned = m.get("kind") == "burned"
+            if burned:
+                cat += "\nIn subtitles burned into the picture: blurred when ticked."
+                chk.setToolTip("Blur this word in the picture")
+            elif kind == "sub":
                 cat += "\nIn the subtitles only: starred out when ticked (the dialogue isn't English)."
                 chk.setToolTip("Star this word out in the subtitles")
             elif m.get("unsure"):
                 cat += "\nFound in the subtitles but not heard clearly: play it to check."
-            wi = QTableWidgetItem(("💬 " if kind == "sub" else "") + m.get("words", ""))
+            icon = "🖼 " if burned else ("💬 " if kind == "sub" else "")
+            wi = QTableWidgetItem(icon + m.get("words", ""))
             wi.setToolTip(cat)
             self.table.setItem(r, 2, wi)
             ci = QTableWidgetItem(m.get("context", ""))
@@ -802,8 +831,8 @@ class ReviewPage(QWidget):
         scenes = [s for s in self.project.scenes if s.get("on", True)]
         subs = self._sub_rows()
         if subs and not self.project.mutes:
-            parts = [f"{sum(1 for x in subs if x.get('on', True))} of {len(subs)} words starred out "
-                     "in the subtitles (the dialogue isn't English)"]
+            parts = [f"{sum(1 for x in subs if x.get('on', True))} of {len(subs)} subtitle words "
+                     "starred out or covered (the dialogue isn't English)"]
         else:
             parts = [f"{len(mutes)} of {len(self.project.mutes)} words will be silenced"]
         if self.project.scenes:
@@ -815,7 +844,8 @@ class ReviewPage(QWidget):
                      "blur": "blurred", "blur_parts": "private parts blurred", "mute": "silenced"}
             what = ", ".join(f"{n} {names[a]}" for a, n in by.items()) or "none changed"
             parts.append(f"{len(scenes)} of {len(self.project.scenes)} scenes ({what})")
-        if any((s.get("action") or self.filters.scene_action) != "mute" for s in scenes):
+        if any((s.get("action") or self.filters.scene_action) != "mute" for s in scenes) or \
+                any(x.get("on", True) for x in getattr(self.project, "burned_edits", [])):
             parts.append("video will be re-encoded at very high quality")
         else:
             parts.append("picture copied untouched")

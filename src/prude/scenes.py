@@ -149,6 +149,38 @@ def shot_boundaries(frames, fps=FPS, progress=None, cancel=None):
     return out
 
 
+def exact_cuts(info, start, length, cache=None):
+    """Camera cuts between start and start+length, to the frame (full frame rate, small size)."""
+    import re
+    key = f"{start:.2f}:{length:.2f}"
+    if cache is not None and key in cache:
+        return cache[key]
+    from .media import ffmpeg, run
+    r = run([ffmpeg(), "-hide_banner", "-nostdin", "-copyts", "-ss", f"{max(0.0, start):.3f}",
+             "-i", str(info.path), "-t", f"{length:.3f}", "-map", f"0:{info.video['index']}", "-an", "-sn",
+             "-vf", "scale=192:-2,select='gt(scene,0.30)',showinfo", "-f", "null", "-"], timeout=120)
+    found = [round(float(m) - info.format_start, 3)
+             for m in re.findall(r"pts_time:\s*([0-9.]+)", r.stderr or "")]
+    if cache is not None:
+        cache[key] = found
+    return found
+
+
+def refine_edges(info, a, b, cache=None):
+    """Move a scene's start/end onto the exact camera cut near the 1-per-second estimate.
+    Never shrinks past a frame that was flagged: the estimate is padded by about a second."""
+    try:
+        cuts = exact_cuts(info, a - 1.0, 2.0, cache)
+        if cuts:
+            a = max(cuts)
+        cuts = exact_cuts(info, b - 1.0, 2.0, cache)
+        if cuts:
+            b = min(cuts)
+    except Exception:                       # noqa: BLE001 - keep the estimate
+        pass
+    return round(max(0.0, a), 3), round(min(info.duration, b), 3)
+
+
 # ---------------------------------------------------------------- nudity
 
 class NudityScorer:
@@ -485,6 +517,21 @@ def watch(info, work_dir: Path, models_dir, filters, progress=None, cancel=None,
         keep.append(x)
     scenes = keep
 
+    edge_path = work_dir / "edges.json"
+    try:
+        edges = json.loads(edge_path.read_text(encoding="utf-8"))
+    except Exception:                       # noqa: BLE001
+        edges = {}
+    for n, s in enumerate(scenes):
+        if cancel is not None and cancel.is_set():
+            raise Cancelled()
+        if progress:
+            progress("analyze", 0.95 + 0.05 * n / max(1, len(scenes)), "Lining up scene edges with camera cuts")
+        s["start"], s["end"] = refine_edges(info, s["start"], s["end"], edges)
+    try:
+        edge_path.write_text(json.dumps(edges), encoding="utf-8")
+    except OSError:
+        pass
     for s in scenes:
         stem = f"{s['kind'].replace(':', '_').replace(' ', '_')[:40]}_{int(s['start'] * 10)}"
         s["thumb"] = make_thumb(Path(s["frame"]), work_dir / "thumbs" / f"{stem}.jpg")

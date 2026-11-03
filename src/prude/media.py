@@ -231,6 +231,41 @@ class MediaInfo:
         return self.video.get("color_transfer") in ("smpte2084", "arib-std-b67")
 
     @property
+    def dolby_vision_profile(self):
+        for sd in self.video.get("side_data_list") or []:
+            if "DOVI" in str(sd.get("side_data_type", "")) or "Dolby Vision" in str(sd.get("side_data_type", "")):
+                try:
+                    return int(sd.get("dv_profile"))
+                except (TypeError, ValueError):
+                    return -1
+        return 0
+
+    def hdr10_metadata(self):
+        """Mastering display + content light level of the first frame (HDR10), or {}."""
+        if not self.is_hdr or not self.video:
+            return {}
+        if getattr(self, "_hdr_meta", None) is not None:
+            return self._hdr_meta
+        meta = {}
+        try:
+            r = run([ffprobe(), "-v", "error", "-select_streams", f"{self.video['index']}",
+                     "-read_intervals", "%+#1", "-show_frames", "-show_entries", "frame=side_data_list",
+                     "-print_format", "json", str(self.path)], timeout=60)
+            frames = json.loads(r.stdout or "{}").get("frames", [])
+            for sd in (frames[0].get("side_data_list") if frames else []) or []:
+                t = sd.get("side_data_type", "")
+                if "Mastering display" in t:
+                    meta["mastering"] = {k: sd.get(k) for k in (
+                        "red_x", "red_y", "green_x", "green_y", "blue_x", "blue_y",
+                        "white_point_x", "white_point_y", "min_luminance", "max_luminance")}
+                elif "Content light level" in t:
+                    meta["max_cll"], meta["max_fall"] = sd.get("max_content"), sd.get("max_average")
+        except Exception:                                  # noqa: BLE001 - optional information
+            meta = {}
+        self._hdr_meta = meta
+        return meta
+
+    @property
     def fps(self):
         r = self.video.get("avg_frame_rate") or self.video.get("r_frame_rate") or "24/1"
         try:

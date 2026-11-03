@@ -663,3 +663,194 @@ def test_picture_subtitles_read_and_starred(media_dir, tmp_path):
     text = _sub_text(out)
     assert "they are coming" in text.lower()
     assert "fuck" not in text.lower() and "****" in text
+
+
+def test_burned_in_words_grouped_and_blurred(media_dir, fake_words, tmp_path):
+    """Sightings of a burned-in subtitle line become one blur box over the word only."""
+    from prude import burnin
+    info = probe(media_dir / "movie51.mkv")          # 640x360
+    pats = build_patterns(["strong"])
+    # the band is the bottom 40% (144 px) read at 960 wide -> scale 1.5
+    lines = [[t, "Get the shit out", 300, 60, 660, 100] for t in (6.0, 6.5, 7.0, 7.5)]
+    lines += [[12.0, "Hello there", 300, 60, 600, 100]]
+    items = burnin.words_from_lines(info, lines, pats)
+    assert len(items) == 1
+    it = items[0]
+    assert it["norm"] == "shit" and it["start"] == pytest.approx(5.4) and it["end"] == pytest.approx(8.1)
+    x, y, w, h = it["box"]
+    # "shit" is characters 8..12 of 16 -> roughly the middle of the line, not the whole line
+    assert 300 / 1.5 < x < 480 / 1.5 + 10 and w < 360 / 1.5 and 360 - 144 <= y < 360
+    f = FilterOptions(words=["strong"])
+    p = _project(media_dir / "movie51.mkv", fake_words)
+    pipeline.find_word_mutes(p, f)
+    p.burned_edits = items
+    out = tmp_path / "burned.mkv"
+    res = pipeline.render_project(p, f, Settings(device="cpu"), out)
+    assert res["burned_words"] == 1 and res["valid"]
+    assert "re-encoded" in res["how"]
+    assert abs(probe(out).duration - 20) < 0.3
+    import cv2
+
+    def frame(path, t):
+        png = tmp_path / f"{Path(path).stem}-{t}.png"
+        subprocess.run([ffmpeg(), "-v", "error", "-y", "-ss", str(t), "-i", str(path), "-frames:v", "1",
+                        str(png)], check=True)
+        return cv2.cvtColor(cv2.imread(str(png)), cv2.COLOR_BGR2GRAY)
+
+    def sharp(img):
+        return cv2.Laplacian(img[y:y + h, x:x + w], cv2.CV_64F).var()
+    a, b = frame(media_dir / "movie51.mkv", 7.0), frame(out, 7.0)
+    assert sharp(b) < 0.3 * sharp(a)                    # the word's spot is blurred
+    a2, b2 = frame(media_dir / "movie51.mkv", 10.0), frame(out, 10.0)
+    assert sharp(b2) > 0.7 * sharp(a2)                  # only while the line shows
+
+
+@pytest.mark.skipif(not __import__("importlib").util.find_spec("rapidocr_onnxruntime"),
+                    reason="RapidOCR not installed")
+def test_burned_in_subtitles_read(tmp_path):
+    """Real text recognition on subtitles drawn into the picture."""
+    import cv2
+    import numpy as np
+    from prude import burnin
+    from conftest import ff
+    txt = np.zeros((80, 760, 4), np.uint8)
+    for color, thick in (((0, 0, 0, 255), 9), ((255, 255, 255, 255), 3)):
+        cv2.putText(txt, "What the fuck is that?", (20, 58), cv2.FONT_HERSHEY_DUPLEX, 1.5, color, thick,
+                    cv2.LINE_AA)
+    cv2.imwrite(str(tmp_path / "t.png"), txt)
+    src = tmp_path / "burned.mkv"
+    ff("-f", "lavfi", "-i", "testsrc2=s=1280x720:r=24:d=12", "-i", str(tmp_path / "t.png"),
+       "-filter_complex", "[0][1]overlay=(W-w)/2:H-h-50:enable='between(t,3,6)'", "-c:v", "libx264",
+       "-preset", "ultrafast", str(src))
+    info = probe(src)
+    assert burnin.has_text(info)
+    items = burnin.scan(info, build_patterns(["strong"]), tmp_path)
+    assert [i["norm"] for i in items] == ["fuck"], items
+    assert 2.0 <= items[0]["start"] <= 3.2 and 5.8 <= items[0]["end"] <= 7.0
+    x, y, w, h = items[0]["box"]
+    assert y > 720 * 0.6 and w < 400
+
+
+def test_hdr10_metadata_kept(tmp_path):
+    """HDR10 source: re-encoding keeps 10-bit HDR color and the brightness details."""
+    from prude.render import x265_hdr_params
+    from conftest import ff
+    from prude.media import encoders
+    if "libx265" not in encoders():
+        pytest.skip("no libx265")
+    src = tmp_path / "hdr.mkv"
+    ff("-f", "lavfi", "-i", "testsrc2=s=640x360:r=24:d=6", "-f", "lavfi", "-i", "sine=f=400:d=6",
+       "-c:v", "libx265", "-preset", "ultrafast", "-pix_fmt", "yuv420p10le",
+       "-x265-params", "log-level=error:hdr10=1:repeat-headers=1:colorprim=bt2020:transfer=smpte2084:"
+       "colormatrix=bt2020nc:master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)"
+       "L(10000000,1):max-cll=1000,400",
+       "-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc",
+       "-c:a", "aac", str(src))
+    info = probe(src)
+    assert info.is_hdr
+    meta = info.hdr10_metadata()
+    assert meta.get("mastering") and int(meta["max_cll"]) == 1000
+    params = x265_hdr_params(info)
+    assert "max-cll=1000,400" in params and any(p.startswith("master-display=G(13250,34500)") for p in params)
+    p = Project.open(src)
+    p.transcript = {"track": 0, "model": "fake", "words": [{"w": " damn", "s": 2.0, "e": 2.3, "p": 0.9}]}
+    f = FilterOptions(words=["mild"])
+    pipeline.find_word_mutes(p, f)
+    p.scenes = [{"id": "b", "kind": "violence", "label": "V", "start": 3.0, "end": 4.0, "on": True,
+                 "action": "black"}]
+    res = pipeline.render_project(p, f, Settings(device="cpu"), tmp_path / "hdr-clean.mkv")
+    got = probe(res["output"])
+    assert got.is_hdr and got.is_10bit
+    assert int(got.hdr10_metadata().get("max_cll") or 0) == 1000
+    assert any("HDR kept" in w and "couldn't" not in w for w in res["warnings"]), res["warnings"]
+
+
+def test_scene_edges_snap_to_exact_camera_cuts(tmp_path):
+    from prude.scenes import refine_edges
+    from conftest import ff
+    src = tmp_path / "shots.mkv"
+    ff("-f", "lavfi", "-i", "testsrc2=s=320x180:r=24:d=3.25", "-f", "lavfi", "-i",
+       "mandelbrot=s=320x180:r=24", "-f", "lavfi", "-i", "smptebars=s=320x180:r=24:d=4",
+       "-filter_complex", "[1]trim=duration=4.25,setpts=PTS-STARTPTS[m];[0][m][2]concat=n=3:v=1[v]",
+       "-map", "[v]", "-c:v", "libx264", "-preset", "ultrafast", str(src))
+    info = probe(src)
+    # 1-per-second estimate: starts about a second early, ends about a second late
+    a, b = refine_edges(info, 2.6, 8.1, {})
+    assert a == pytest.approx(3.25, abs=0.05) and b == pytest.approx(7.5, abs=0.05)
+    # no camera cut nearby -> the estimate is kept
+    assert refine_edges(info, 10.0, 11.0, {}) == (10.0, 11.0)
+
+
+@pytest.mark.parametrize("codec", ["h264", "hevc"])
+def test_fast_cuts_copy_the_picture(tmp_path, fake_words, codec):
+    """Cutting with 'fast cuts': no re-encode, no frame of the cut scene left, sound in sync."""
+    import cv2
+    import numpy as np
+    from conftest import ff
+    from prude.export import ExportOptions
+    src = tmp_path / "gop.mkv"
+    # 0-6 s gray picture + 300 Hz, 6-9 s RED picture (the scene to cut) + 1000 Hz, 9-20 s gray + 300 Hz
+    ff("-f", "lavfi", "-i", "testsrc2=s=320x180:r=24:d=20", "-f", "lavfi", "-i", "sine=f=300:d=20",
+       "-f", "lavfi", "-i", "sine=f=1000:d=20",
+       "-filter_complex", "[0]drawbox=c=red:t=fill:enable='between(t,6,9)'[v];"
+                          "[1]volume=0:enable='between(t,6,9)'[q];[2]volume=0:enable='not(between(t,6,9))'[r];"
+                          "[q][r]amix=inputs=2:normalize=0[a]",
+       "-map", "[v]", "-map", "[a]",
+       *(["-c:v", "libx264", "-preset", "ultrafast", "-bf", "3",
+          "-x264-params", "keyint=48:min-keyint=48:scenecut=0:open-gop=1"] if codec == "h264" else
+         ["-c:v", "libx265", "-preset", "ultrafast",
+          "-x265-params", "log-level=error:keyint=48:min-keyint=48:scenecut=0:open-gop=1:bframes=4"]),
+       "-c:a", "flac", str(src))
+    p = _project(src, fake_words)
+    p.scenes = [{"id": "c", "kind": "violence", "label": "V", "start": 6.0, "end": 9.0, "on": True,
+                 "action": "cut"}]
+    f = FilterOptions(words=[])
+    pipeline.find_word_mutes(p, f)
+    res = pipeline.render_project(p, f, Settings(device="cpu"), tmp_path / "fast.mkv",
+                                  export=ExportOptions(fast_cuts=True))
+    assert res["how"] == "video copied untouched (fast cuts)", res
+    assert res["valid"], res["problems"]
+    out = Path(res["output"])
+    # keyframes every 2 s: the cut runs on to the keyframe at 10 s, and stops a bit before 6 s
+    assert 15.7 <= probe(out).duration <= 16.1
+    r = subprocess.run([ffmpeg(), "-v", "error", "-i", str(out), "-map", "0:v", "-vf", "scale=32:18",
+                        "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], capture_output=True)
+    frames = np.frombuffer(r.stdout, np.uint8).reshape(-1, 18, 32, 3).astype(int)
+    red = [i for i, fr in enumerate(frames) if (fr[..., 0] - fr[..., 1]).mean() > 120]
+    assert not red, f"cut scene leaked into frames {red[:5]}"
+    assert not r.stderr.strip(), r.stderr[:500]          # decodes cleanly across the splice
+    # sound in sync: the cut scene's 1000 Hz tone is gone, the 300 Hz tone plays on both sides
+
+    def band(t, f):
+        r = subprocess.run([ffmpeg(), "-hide_banner", "-ss", str(t), "-t", "0.2", "-i", str(out), "-map", "0:a",
+                            "-af", f"bandpass=f={f}:width_type=q:w=8,bandpass=f={f}:width_type=q:w=8,astats",
+                            "-f", "null", "-"], capture_output=True, text=True)
+        v = [l for l in r.stderr.splitlines() if "RMS level dB" in l][-1].split(":")[-1].strip()
+        return -200.0 if v == "-inf" else float(v)
+    for t in (1.0, 5.3, 5.9, 6.1, 7.0, 9.0, 13.0):
+        assert band(t, 1000) < band(t, 300) - 30, t
+
+
+def test_soft_fades_and_other_audio_tracks(tmp_path, fake_words):
+    from conftest import ff
+    from prude.export import ExportOptions
+    src = tmp_path / "two.mkv"
+    ff("-f", "lavfi", "-i", "testsrc2=s=320x180:r=24:d=20", "-f", "lavfi", "-i", "sine=f=400:d=20",
+       "-f", "lavfi", "-i", "sine=f=700:d=20", "-map", "0", "-map", "1", "-map", "2", "-c:v", "libx264",
+       "-preset", "ultrafast", "-c:a", "ac3", "-metadata:s:a:0", "language=eng",
+       "-metadata:s:a:1", "language=fre", str(src))
+    f = FilterOptions(words=["mild"], mute_fade=True)
+    p = _project(src, fake_words)
+    pipeline.find_word_mutes(p, f)
+    p.scenes = [{"id": "c", "kind": "violence", "label": "V", "start": 12.0, "end": 14.0, "on": True,
+                 "action": "cut"}]
+    res = pipeline.render_project(p, f, Settings(device="cpu"), tmp_path / "out.mkv",
+                                  export=ExportOptions(other_audio=True))
+    assert res["valid"], res["problems"]
+    got = probe(res["output"])
+    assert len(got.audio) == 2
+    assert "not filtered" in got.audio[1].title and got.audio[1].language == "fre"
+    assert not got.audio[1].default and got.audio[0].default
+    assert abs(got.duration - 18.0) < 0.3
+    assert level(res["output"], 5.25) < -60            # "hell" is silent in the middle
+    assert level(res["output"], 2.0) > -40

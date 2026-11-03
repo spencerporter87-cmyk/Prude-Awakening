@@ -22,6 +22,8 @@ class ExportOptions:
     naming: str = "plex_edition"
     edition: str = "Family Edit"
     own_folder: bool = True          # put it in a "Title (Year)" folder when saving elsewhere
+    fast_cuts: bool = False          # cut scenes without re-encoding (cuts land on keyframes)
+    other_audio: bool = False        # also keep the other audio tracks (not filtered!)
 
     @classmethod
     def from_dict(cls, d):

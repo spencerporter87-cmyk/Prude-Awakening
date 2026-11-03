@@ -13,6 +13,8 @@ class FilterOptions:
     custom_words: str = ""
     allow_words: str = ""
     padding: float = 0.15
+    mute_fade: bool = False           # soften the edges of each silence (30 ms)
+    burned_subs: str = "auto"         # subtitles in the picture: auto (foreign films) | on | off
     star_style: str = "stars"         # subtitles: stars "****" | first "f***" | word "freaking"
     mute_mode: str = "all"            # all | center
     scenes: list = field(default_factory=list)   # scene type keys, see scenes.SCENE_TYPES

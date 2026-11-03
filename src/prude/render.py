@@ -60,6 +60,34 @@ def audio_codec_args(st: dict, out_ext, quality="match"):
     return ["-c:a:0", "flac"]
 
 
+def _ratio(v):
+    try:
+        a, _, b = str(v).partition("/")
+        return float(a) / float(b or 1)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def x265_hdr_params(info):
+    """x265 settings that keep HDR10 brightness information (mastering display, MaxCLL)."""
+    meta = info.hdr10_metadata() if info.is_hdr else {}
+    out = []
+    m = meta.get("mastering")
+    if m:
+        c = {k: _ratio(m.get(k)) for k in m}
+        if all(v is not None for v in c.values()):
+            def xy(a, b):
+                return f"({round(c[a] * 50000)},{round(c[b] * 50000)})"
+            out.append("master-display=G" + xy("green_x", "green_y") + "B" + xy("blue_x", "blue_y") +
+                       "R" + xy("red_x", "red_y") + "WP" + xy("white_point_x", "white_point_y") +
+                       f"L({round(c['max_luminance'] * 10000)},{round(c['min_luminance'] * 10000)})")
+    if meta.get("max_cll") is not None:
+        out.append(f"max-cll={int(meta['max_cll'])},{int(meta.get('max_fall') or 0)}")
+    if info.is_hdr and info.video.get("color_transfer") == "smpte2084":
+        out += ["hdr10=1", "hdr10-opt=1", "repeat-headers=1"]
+    return out
+
+
 def video_encoder_args(info, quality="high", device="auto"):
     """Returns (args, description)."""
     tenbit = info.is_10bit
@@ -79,14 +107,23 @@ def video_encoder_args(info, quality="high", device="auto"):
     if "libx265" in encoders() and (tenbit or info.is_hdr):
         args = ["-c:v", "libx265", "-preset", "slow" if quality == "max" else "medium",
                 "-crf", "16" if quality == "max" else "18", "-pix_fmt", "yuv420p10le",
-                "-x265-params", "log-level=error"]
+                "-x265-params", ":".join(["log-level=error"] + x265_hdr_params(info))]
         return args + color, "processor (x265, 10-bit)"
     args = ["-c:v", "libx264", "-preset", "slow" if quality == "max" else "medium",
             "-crf", "15" if quality == "max" else "17", "-pix_fmt", "yuv420p"]
     return args + color, "processor (x264)"
 
 
-def build_audio_chain(info, track, mutes, blackouts, cuts, mute_mode):
+FADE = 0.03
+
+
+def _fade_gain(ranges, fade=FADE):
+    """volume expression: 0 inside each range, ramping over `fade` s at the edges, 1 elsewhere."""
+    terms = [f"clip((abs(t-{(a + b) / 2:.3f})-{(b - a) / 2:.3f})/{fade},0,1)" for a, b in ranges]
+    return "*".join(terms) or "1"
+
+
+def build_audio_chain(info, track, mutes, blackouts, cuts, mute_mode, fade=False):
     st = info.audio[track].raw
     src = f"[0:a:{track}]asetnsamples=n=256:p=0"
     graph, label = [], "a0"
@@ -98,14 +135,21 @@ def build_audio_chain(info, track, mutes, blackouts, cuts, mute_mode):
         join_in = "".join("[cfc]" if i == fc else f"[c{i}]" for i in range(len(chans)))
         jmap = "|".join(f"{i}.0-{c}" for i, c in enumerate(chans))
         graph.append(f"{src},channelsplit=channel_layout={layout}{pads}")
-        graph.append(f"[c{fc}]volume=0:enable='{_between(mutes)}'[cfc]")
+        if fade:
+            graph.append(f"[c{fc}]volume='{_fade_gain([(a - FADE, b + FADE) for a, b in mutes])}'"
+                         f":eval=frame[cfc]")
+        else:
+            graph.append(f"[c{fc}]volume=0:enable='{_between(mutes)}'[cfc]")
         graph.append(f"{join_in}join=inputs={len(chans)}:channel_layout={layout}:map={jmap}[{label}]")
         chain = f"[{label}]anull"
         whole_mutes = list(blackouts)
     else:
         chain = src
         whole_mutes = merge_ranges(list(mutes) + list(blackouts))
-    if whole_mutes:
+    if whole_mutes and fade:
+        # the fade is outside the word: the ramp starts FADE before the silence
+        chain += f",volume='{_fade_gain([(a - FADE, b + FADE) for a, b in whole_mutes])}':eval=frame"
+    elif whole_mutes:
         chain += f",volume=0:enable='{_between(whole_mutes)}'"
     if cuts:
         removed = "+".join(f"gte(T,{b:.3f})*{b - a:.3f}" for a, b in cuts)
@@ -201,10 +245,42 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
     silent_blacks, sound_blacks = by_action["black"], by_action["black_keep"]
     blackouts = merge_ranges(silent_blacks + sound_blacks)
     mute_scenes = by_action["mute"]
+    burned = [(float(x["start"]), float(x["end"]), *[int(v) for v in x["box"]])
+              for x in getattr(project, "burned_edits", []) if x.get("on", True) and x.get("box")]
     cut_total = sum(b - a for a, b in cuts)
     if cuts and info.duration and info.duration - cut_total < 1.0:
         raise MediaError("Every part of the movie is marked for removal, so nothing would be left. "
                          "Untick some scenes and try again.")
+
+    # ---- fast cuts: copy the picture between cuts instead of re-encoding it
+    fast_list, fast_note, fast_work = None, "", None
+    if (export is not None and getattr(export, "fast_cuts", False) and cuts and not
+            (blackouts or blurs or parts or burned or scale_h)):
+        from . import smartcut
+        pl = smartcut.plan(info, cuts)
+        if pl:
+            fast_work = out.parent / f".{out.stem}.prude-parts"
+            if progress:
+                progress(0.0, "Copying the picture between cuts")
+            try:
+                got_parts = smartcut.copy_parts(info, pl[1], fast_work, cancel)
+            except MediaError as e:
+                log(str(e))
+                got_parts = None
+            if got_parts:
+                fast_list, real = got_parts
+                cuts = smartcut.cuts_from_kept(real, info.duration)
+                cut_total = sum(b - a for a, b in cuts)
+                fast_note = (f"Fast cuts: the picture was copied untouched; to start on a keyframe the "
+                             f"cuts ran on {pl[2] + 0.25 * len(pl[1]):.1f} s longer in total.")
+                log(fast_note)
+            else:
+                smartcut.cleanup(fast_work)
+                fast_work = None
+                log("Fast cuts didn't fit this file; re-encoding the picture instead.")
+        else:
+            log("Fast cuts don't fit this file (keyframes too far apart or unsupported format); "
+                "re-encoding the picture instead.")
 
     # ---- subtitles
     from .subscan import IMAGE_SUB_CODECS, is_english_track, kept_keys
@@ -293,16 +369,42 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
             pgraph, vsrc = blurparts.filter_parts(info, found, cmd_name, _between(
                 [(a - 0.3, b + 0.3) for a, b in found]))
         shutil.rmtree(out.parent / f".{out.stem}.prude-blur", ignore_errors=True)
+    # ---- words in subtitles burned into the picture: blur their spot while they show
+    if burned and info.video:
+        from . import burnin
+        bgraph, vsrc = burnin.filter_graph(burned, vsrc)
+        pgraph = pgraph + bgraph
+        notes.append(f"Covered {len(burned)} word(s) in subtitles burned into the picture.")
 
     graph = build_audio_chain(info, track, mutes, merge_ranges(silent_blacks + mute_scenes), cuts,
-                              filters.mute_mode)
-    vgraph = pgraph + build_video_chain(blackouts, cuts, blurs, vsrc, scale_h)
+                              filters.mute_mode, fade=getattr(filters, "mute_fade", False))
+    # ---- other audio tracks (other languages, commentary): kept as they are, NOT filtered
+    others = []                 # (map target, raw stream, needs encoding)
+    if export is not None and getattr(export, "other_audio", False):
+        for j, t in enumerate(info.audio):
+            if j == track:
+                continue
+            if cuts:
+                removed = "+".join(f"gte(T,{b:.3f})*{b - a:.3f}" for a, b in cuts)
+                graph.append(f"[0:a:{j}]aselect='not({_between(cuts)})',asetpts='PTS-({removed})/TB',"
+                             f"aresample=async=1:first_pts=0[ao{j}]")
+                others.append((f"[ao{j}]", t.raw, True))
+            else:
+                others.append((f"0:a:{j}", t.raw, out_ext in MP4_LIKE))
+    vgraph = pgraph + build_video_chain(blackouts, [] if fast_list else cuts, blurs, vsrc, scale_h)
     graph += vgraph
     graph_text = ";".join(graph)
 
+    if vgraph and info.dolby_vision_profile == 5:
+        raise MediaError("This file is Dolby Vision profile 5 (streaming-style Dolby Vision without an HDR10 "
+                         "base). Its colors can't be kept when the picture is changed, so scenes can't be cut, "
+                         "blacked out or blurred in it. Word muting still works: set the scenes to "
+                         "\"Silence\" or untick them, or use a different version of the movie.")
     cmd = [ffmpeg(), "-y", "-i", str(info.path)]
     for p, *_ in subs:
         cmd += ["-i", str(p)]
+    if fast_list:
+        cmd += ["-f", "concat", "-safe", "0", "-i", str(fast_list)]
     if len(graph_text) > 20000:
         script = out.with_name(f"{out.stem}.prude-filter.txt")
         script.write_text(graph_text, encoding="utf-8")
@@ -314,14 +416,18 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
 
     if vgraph:
         cmd += ["-map", "[vout]"]
+    elif fast_list:
+        cmd += ["-map", f"{len(subs) + 1}:v:0"]
     elif info.video:
         cmd += ["-map", f"0:{info.video['index']}"]
     cmd += ["-map", "[aout]"]
+    for target, _raw, _enc in others:
+        cmd += ["-map", target]
     for k in range(len(subs)):
         cmd += ["-map", f"{k + 1}:0"]
 
     cmd += ["-c", "copy"]
-    how = "video copied untouched"
+    how = "video copied untouched" + (" (fast cuts)" if fast_list else "")
     vcodec = info.video.get("codec_name")
     if vgraph:
         vargs, enc = video_encoder_args(info, quality, device)
@@ -330,6 +436,16 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
         vcodec = "h264" if "libx264" in vargs else "hevc"
     aargs = audio_codec_args(st, out_ext)
     cmd += aargs
+    for k, (_t, raw, enc) in enumerate(others, start=1):
+        if enc:
+            cmd += [a.replace(":a:0", f":a:{k}") for a in audio_codec_args(raw, out_ext)]
+        tg = raw.get("tags", {})
+        name = tg.get("title") or LANG_NAMES.get((tg.get("language") or "").lower(), "Audio")
+        if tg.get("language"):
+            cmd += [f"-metadata:s:a:{k}", f"language={tg['language']}"]
+        cmd += [f"-metadata:s:a:{k}", f"title={name} (not filtered)", f"-disposition:a:{k}", "0"]
+    if others:
+        notes.append(f"Kept {len(others)} other audio track(s) as they are - they are NOT filtered.")
     if subs:
         cmd += ["-c:s", "mov_text" if out_ext in MP4_LIKE else "srt"]
         for j, (_p, lang, title, forced, default) in enumerate(subs):
@@ -362,20 +478,32 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
     finally:
         for f in tmp_files:
             Path(f).unlink(missing_ok=True)
+        if fast_work is not None:
+            shutil.rmtree(fast_work, ignore_errors=True)
 
     expected = max(1.0, info.duration - cut_total)
     ok, problems, got = validate(partial, expected, bool(info.video), bool(subs))
     import os
     os.replace(partial, out)
+    if got is not None:
+        got.path = out
     warnings = []
     if vgraph:
         why = []
         if cuts or blackouts or blurs or parts:
             why.append("scenes were changed")
+        if burned:
+            why.append("words in burned-in subtitles were covered")
         if scale_h:
             why.append(f"resized to {scale_h}p")
         warnings.append(f"Video re-encoded ({', '.join(why)}) at {'maximum' if quality == 'max' else 'very high'} "
                         f"quality - not bit-for-bit identical to the original.")
+        if info.is_hdr:
+            kept = got is not None and bool(got.hdr10_metadata()) if info.hdr10_metadata() else True
+            if info.dolby_vision_profile:
+                warnings.append("Dolby Vision was removed by re-encoding; the HDR10 picture is kept.")
+            warnings.append("HDR kept (10-bit, HDR color)." + ("" if kept else
+                            " The HDR brightness details couldn't be copied; TVs use their defaults."))
     else:
         warnings.append("Video copied bit-for-bit - identical picture quality.")
     src_a = AUDIO_NAMES.get(st.get("codec_name"), (st.get("codec_name") or "?").upper())
@@ -384,10 +512,12 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
     lossless = dst_codec in ("flac", "alac")
     warnings.append(f"Audio re-encoded {src_a} -> {dst_a}" + (" (lossless)." if lossless else
                     " at high bitrate (needed to silence words)."))
+    if fast_note:
+        warnings.append(fast_note)
     warnings += notes
     result = {"output": str(out), "how": how, "mutes": len(mutes), "cuts": len(cuts),
             "blackouts": len(blackouts), "blurs": len(blurs), "muted_scenes": len(mute_scenes),
-            "parts_blurred": len(parts),
+            "parts_blurred": len(parts), "burned_words": len(burned),
             "removed_seconds": round(cut_total, 1), "notes": notes,
             "original_duration": round(info.duration, 2),
             "final_duration": round(got.duration if got else expected, 2),

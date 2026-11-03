@@ -15,7 +15,11 @@ Mutes bad language and removes scenes you'd rather not see — automatically, on
    from the dialogue. Picture-based subtitles (Blu-ray/DVD) are read with offline text
    recognition and cleaned too. In English movies the subtitles double-check the listening
    and catch words it missed.
-5. **Foreign-language films** (e.g. Apocalypto): the dialogue is left alone, the English
+   Subtitles burned into the picture are read too (automatically for foreign-language films
+   without subtitle tracks); swear words there are blurred.
+5. **Fast cuts** (optional): scenes are removed without re-encoding the picture; each cut lands
+   on the next keyframe. HDR10 movies keep their HDR brightness information when re-encoded.
+6. **Foreign-language films** (e.g. Apocalypto): the dialogue is left alone, the English
    subtitles are cleaned and set to show automatically.
 
 Your movies, transcripts and choices never leave your computer.
