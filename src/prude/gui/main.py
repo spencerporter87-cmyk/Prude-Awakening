@@ -280,21 +280,38 @@ class MainWindow(QMainWindow):
     def start_render(self):
         if self.busy():
             return
+        from ..export import ExportOptions
+        from ..render import scene_ranges
+        from .export_dialog import ExportDialog
         f = getattr(self, "_filters", None) or FilterOptions.from_dict(self.settings.filters)
-        out = output_path(Path(self.project.source), self.settings.output_dir)
-        if out.exists():
-            r = QMessageBox.question(self, "Replace?", f"{out.name} already exists. Replace it?")
-            if r != QMessageBox.Yes:
-                return
-        if Path(out).resolve() == Path(self.project.source).resolve():
-            self.error("Can't overwrite the original", "Choose a different output folder in Settings.")
+        opts = ExportOptions.from_dict(self.settings.export) if self.settings.export else \
+            ExportOptions(folder=self.settings.output_dir, quality=self.settings.video_quality,
+                          naming="plex_edition")
+        r = scene_ranges(self.project, f.scene_action)
+        reencode = any(r[a] for a in ("cut", "black", "black_keep", "blur", "blur_parts"))
+        removed = sum(b - a for a, b in r["cut"])
+        preset = self.settings.last_preset if self.settings.last_preset != "Custom" else ""
+        dlg = ExportDialog(self.project.source, self.info, opts, reencode, removed,
+                           f"{preset} Edit" if preset else "", self)
+        if not dlg.exec():
             return
-        reencode = bool(self.project.active_scenes())
+        opts, out = dlg.options(), dlg.output()
+        self.settings.export = opts.to_dict()
+        self.settings.save()
+        if Path(out).resolve() == Path(self.project.source).resolve():
+            self.error("Can't overwrite the original", "Choose a different name or folder.")
+            return
+        if out.exists():
+            q = QMessageBox.question(self, "Replace?", f"{out.name} already exists. Replace it?")
+            if q != QMessageBox.Yes:
+                return
+        resized = opts.resolution != "source" and self.info.height and self.info.height > int(opts.resolution) + 8
         self._filters_used = f
         self.review.leave()
-        self.renderp.start(Path(self.project.source).name, out, reencode, self.project, f, self.info.duration)
+        self.renderp.start(Path(self.project.source).name, out, reencode or resized, self.project, f,
+                           self.info.duration)
         self.stack.setCurrentWidget(self.renderp)
-        self.worker = Worker(render_project, self.project, f, self.settings, out)
+        self.worker = Worker(render_project, self.project, f, self.settings, out, export=opts)
         self.worker.progress.connect(self.renderp.on_progress)
         self.worker.log.connect(lambda m: log.info(m))
         self.worker.finished_ok.connect(self._render_done)

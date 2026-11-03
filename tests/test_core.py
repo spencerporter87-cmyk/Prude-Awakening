@@ -369,3 +369,106 @@ def test_blur_only_body_parts(media_dir, fake_words, tmp_path, monkeypatch):
     o2, c2 = frame(media_dir / "movie51.mkv", 14.0), frame(out, 14.0)
     assert abs(c2[inside] - o2[inside]).mean() < 6            # no blur outside the scene
     assert level(out, 6.0) > -40                              # sound kept
+
+
+# ---------------------------------------------------------------- stable edit identity
+def test_ids_survive_shifted_rescan():
+    from prude.pipeline import _carry_over
+    old = [{"id": "w1", "start": 10.04, "end": 10.6, "words": "damn", "category": "mild", "on": False},
+           {"id": "s1", "kind": "violence", "group": "violence", "start": 99.4, "end": 120.0, "on": True,
+            "action": "blur", "action_set": True}]
+    # a re-scan finds the same things, nudged across a rounding boundary
+    new = [{"start": 9.4, "end": 10.1, "words": "damn", "category": "mild"},
+           {"kind": "violence", "group": "violence", "start": 100.6, "end": 118.0}]
+    out = _carry_over(new, old)
+    w = [x for x in out if x.get("words") == "damn"][0]
+    s = [x for x in out if x.get("kind") == "violence"][0]
+    assert (w["id"], w["on"]) == ("w1", False)
+    assert (s["id"], s["action"]) == ("s1", "blur")
+
+
+def test_different_things_get_new_ids():
+    from prude.pipeline import _carry_over
+    old = [{"id": "w1", "start": 10.0, "end": 10.5, "words": "damn", "category": "mild", "on": False}]
+    out = _carry_over([{"start": 10.1, "end": 10.6, "words": "hell", "category": "mild"}], old)
+    assert out[0]["id"] != "w1" and out[0]["on"] is True
+
+
+def test_old_projects_migrate(media_dir):
+    import json
+    p = Project.open(media_dir / "movie51.mkv")
+    p.mutes = [{"start": 1.0, "end": 2.0, "words": "x", "on": True}]
+    p.save()
+    raw = json.loads((p.dir / "project.json").read_text())
+    raw.pop("schema", None)
+    raw["mutes"][0].pop("id", None)
+    (p.dir / "project.json").write_text(json.dumps(raw))
+    q = Project.open(media_dir / "movie51.mkv")
+    assert q.schema == 2 and q.mutes[0]["id"] and q.mutes[0]["origin"] == "auto"
+
+
+# ---------------------------------------------------------------- export options & Plex naming
+def test_title_parsing_and_plex_names(tmp_path):
+    from prude.export import ExportOptions, output_path, parse_title
+    assert parse_title(Path("Pretty Woman (1990).mkv")) == ("Pretty Woman", "1990")
+    assert parse_title(Path("The.Matrix.1999.1080p.BluRay.x264.mkv")) == ("The Matrix", "1999")
+    assert parse_title(Path("Movies/Up (2009)/movie.mkv")) == ("Up", "2009")
+    src = tmp_path / "Movies" / "The Matrix (1999)" / "The Matrix (1999).mkv"
+    o = ExportOptions(naming="plex_edition", edition="Family Edit")
+    assert output_path(src, o).name == "The Matrix (1999) {edition-Family Edit}.mkv"
+    assert output_path(src, o).parent == src.parent                     # next to the original
+    o2 = ExportOptions(naming="plex_library", folder=str(tmp_path / "Family Movies"), container="mp4")
+    assert output_path(src, o2) == tmp_path / "Family Movies" / "The Matrix (1999)" / "The Matrix (1999).mp4"
+    o3 = ExportOptions(naming="plex_library")                           # same folder + same name
+    assert output_path(src, o3) != src and "(clean)" in output_path(src, o3).name
+    o4 = ExportOptions(naming="plex_edition", edition='Kids: "PG" cut?')
+    assert output_path(src, o4).name == "The Matrix (1999) {edition-Kids PG cut}.mkv"
+
+
+def test_export_mp4_720p_with_summary(media_dir, fake_words, tmp_path):
+    from prude.export import ExportOptions
+    f = FilterOptions(words=["mild"])
+    p = _project(media_dir / "movie51.mkv", fake_words)
+    pipeline.find_word_mutes(p, f)
+    p.scenes = [{"id": "a", "kind": "violence", "label": "V", "start": 2.0, "end": 4.0, "on": True,
+                 "action": "cut"}]
+    ex = ExportOptions(folder=str(tmp_path / "Plex"), container="mp4", resolution="720",
+                       naming="plex_edition", edition="Family Edit")
+    src = tmp_path / "Up (2009).mkv"
+    src.write_bytes((media_dir / "movie51.mkv").read_bytes())
+    p.source = str(src)
+    res = pipeline.render_project(p, f, Settings(device="cpu"), export=ex)
+    out = Path(res["output"])
+    assert out == tmp_path / "Plex" / "Up (2009)" / "Up (2009) {edition-Family Edit}.mp4"
+    assert res["valid"] and not res["problems"]
+    assert res["final_duration"] == pytest.approx(18.0, abs=0.3) and res["original_duration"] == pytest.approx(20.0, abs=0.1)
+    assert res["size_bytes"] > 0 and res["resolution"] == "640x360"      # 360p source is never upscaled
+    assert any("re-encoded" in w for w in res["warnings"])
+    assert not list(out.parent.glob("*.partial*"))
+    assert p.exports and p.exports[-1]["edition"] == "Family Edit"
+
+
+def test_resize_down(media_dir, fake_words, tmp_path):
+    from prude.export import ExportOptions
+    from prude.media import probe as pr
+    big = tmp_path / "big.mkv"
+    subprocess.run([ffmpeg(), "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=24:d=4",
+                    "-f", "lavfi", "-i", "sine=d=4", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
+                    str(big)], check=True)
+    p = _project(big, [{"w": " damn", "s": 1.0, "e": 1.4, "p": 1}])
+    f = FilterOptions(words=["mild"])
+    pipeline.find_word_mutes(p, f)
+    res = pipeline.render_project(p, f, Settings(device="cpu"),
+                                  export=ExportOptions(resolution="720", naming="simple"))
+    assert pr(res["output"]).height == 720 and res["valid"]
+
+
+def test_copy_only_export_is_marked_untouched(media_dir, fake_words, tmp_path):
+    from prude.export import ExportOptions
+    f = FilterOptions(words=["mild"])
+    p = _project(media_dir / "movie51.mkv", fake_words)
+    pipeline.find_word_mutes(p, f)
+    res = pipeline.render_project(p, f, Settings(), export=ExportOptions(folder=str(tmp_path), naming="simple"))
+    assert res["how"] == "video copied untouched" and res["valid"]
+    assert any("bit-for-bit" in w for w in res["warnings"])
+    assert video_md5(media_dir / "movie51.mkv") == video_md5(res["output"])

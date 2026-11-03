@@ -66,6 +66,7 @@ class Settings:
     filters: dict = field(default_factory=lambda: asdict(BUILTIN_PRESETS["Family night"]))
     presets: dict = field(default_factory=dict)  # user presets name -> FilterOptions dict
     recent: list = field(default_factory=list)
+    export: dict = field(default_factory=dict)   # last ExportOptions used
     window: list = field(default_factory=list)   # x, y, w, h
 
     @property

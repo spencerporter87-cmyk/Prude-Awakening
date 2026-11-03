@@ -127,8 +127,8 @@ def scene_ranges(project, default_action):
     return {a: merge_ranges(r) for a, r in out.items()}
 
 
-def build_video_chain(blackouts, cuts, blurs=(), src="[0:v:0]"):
-    if not blackouts and not cuts and not blurs:
+def build_video_chain(blackouts, cuts, blurs=(), src="[0:v:0]", scale_h=None):
+    if not blackouts and not cuts and not blurs and not scale_h:
         return [f"{src}null[vout]"] if src != "[0:v:0]" else []
     chain = src
     parts = []
@@ -142,23 +142,52 @@ def build_video_chain(blackouts, cuts, blurs=(), src="[0:v:0]"):
         removed = "+".join(f"gte(T,{b:.3f})*{b - a:.3f}" for a, b in cuts)
         parts.append(f"select='not({_between(cuts)})'")
         parts.append(f"setpts='PTS-({removed})/TB'")
+    if scale_h:
+        parts.append(f"scale=-2:{int(scale_h)}:flags=lanczos")
     return [chain + ",".join(parts) + "[vout]"]
 
 
 def render(info, project, filters, settings, patterns, out: Path, progress=None, cancel=None,
-           log=print):
-    """Returns a dict summary. filters: FilterOptions; settings: Settings."""
+           log=print, export=None):
+    """Returns a dict summary. filters: FilterOptions; settings: Settings; export: ExportOptions."""
     try:
         return _render(info, project, filters, settings, patterns, out, progress, cancel, log,
-                       settings.device)
+                       settings.device, export)
     except MediaError as e:
         if settings.device == "cpu" or not project.active_scenes() or (cancel is not None and cancel.is_set()):
             raise
         log(f"Graphics card video encoding failed ({str(e)[-300:]}); retrying on the processor.")
-        return _render(info, project, filters, settings, patterns, out, progress, cancel, log, "cpu")
+        return _render(info, project, filters, settings, patterns, out, progress, cancel, log, "cpu", export)
 
 
-def _render(info, project, filters, settings, patterns, out, progress, cancel, log, device):
+AUDIO_NAMES = {"ac3": "Dolby Digital (AC3)", "eac3": "Dolby Digital Plus", "aac": "AAC", "flac": "FLAC",
+               "alac": "ALAC", "dts": "DTS", "truehd": "Dolby TrueHD", "mp3": "MP3", "opus": "Opus",
+               "libopus": "Opus", "libmp3lame": "MP3"}
+
+
+def validate(out: Path, expected_duration, want_video, want_subs):
+    """Check the finished file with ffprobe. Returns (ok, problems, info)."""
+    from .media import probe
+    problems = []
+    try:
+        got = probe(out)
+    except Exception as e:
+        return False, [f"The finished file can't be read: {e}"], None
+    if want_video and not got.video:
+        problems.append("The finished file has no video stream.")
+    if not got.audio:
+        problems.append("The finished file has no audio stream.")
+    if expected_duration and abs(got.duration - expected_duration) > max(2.0, expected_duration * 0.01):
+        problems.append(f"Length is {got.duration:.1f} s; expected about {expected_duration:.1f} s.")
+    if want_subs and not got.subtitles:
+        problems.append("Subtitles were expected but are missing.")
+    return not problems, problems, got
+
+
+def _render(info, project, filters, settings, patterns, out, progress, cancel, log, device, export=None):
+    from .export import target_height
+    quality = export.quality if export else settings.video_quality
+    scale_h = target_height(info, export) if export else None
     track = project.audio_track
     st = info.audio[track].raw
     out = Path(out)
@@ -235,7 +264,7 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
 
     graph = build_audio_chain(info, track, mutes, merge_ranges(silent_blacks + mute_scenes), cuts,
                               filters.mute_mode)
-    vgraph = pgraph + build_video_chain(blackouts, cuts, blurs, vsrc)
+    vgraph = pgraph + build_video_chain(blackouts, cuts, blurs, vsrc, scale_h)
     graph += vgraph
     graph_text = ";".join(graph)
 
@@ -263,11 +292,12 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
     how = "video copied untouched"
     vcodec = info.video.get("codec_name")
     if vgraph:
-        vargs, enc = video_encoder_args(info, settings.video_quality, device)
+        vargs, enc = video_encoder_args(info, quality, device)
         cmd += vargs
         how = f"video re-encoded on the {enc}"
         vcodec = "h264" if "libx264" in vargs else "hevc"
-    cmd += audio_codec_args(st, out_ext)
+    aargs = audio_codec_args(st, out_ext)
+    cmd += aargs
     if subs:
         cmd += ["-c:s", "mov_text" if out_ext in MP4_LIKE else "srt"]
         for j, (_p, lang, title, forced) in enumerate(subs):
@@ -283,7 +313,8 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
         if vcodec == "hevc":
             cmd += ["-tag:v", "hvc1"]
         cmd += ["-movflags", "+faststart"]
-    cmd += [str(out)]
+    partial = out.with_name(f"{out.stem}.partial{out.suffix}")   # renamed only when complete
+    cmd += [str(partial)]
 
     log(f"Rendering: {how}; {len(mutes)} mutes, {len(cuts)} cuts, {len(blackouts)} blacked out, "
         f"{len(blurs)} blurred, {len(mute_scenes)} scenes muted.")
@@ -293,12 +324,41 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
                    (lambda f, m: progress(0.03 + 0.97 * f, m)) if (progress and parts) else progress,
                    cancel, "Re-encoding" if vgraph else "Copying", fps=info.fps, cwd=out.parent)
     except BaseException:
-        out.unlink(missing_ok=True)
+        partial.unlink(missing_ok=True)
         raise
     finally:
         for f in tmp_files:
             Path(f).unlink(missing_ok=True)
-    return {"output": str(out), "how": how, "mutes": len(mutes), "cuts": len(cuts),
+
+    expected = max(1.0, info.duration - cut_total)
+    ok, problems, got = validate(partial, expected, bool(info.video), bool(subs))
+    import os
+    os.replace(partial, out)
+    warnings = []
+    if vgraph:
+        why = []
+        if cuts or blackouts or blurs or parts:
+            why.append("scenes were changed")
+        if scale_h:
+            why.append(f"resized to {scale_h}p")
+        warnings.append(f"Video re-encoded ({', '.join(why)}) at {'maximum' if quality == 'max' else 'very high'} "
+                        f"quality - not bit-for-bit identical to the original.")
+    else:
+        warnings.append("Video copied bit-for-bit - identical picture quality.")
+    src_a = AUDIO_NAMES.get(st.get("codec_name"), (st.get("codec_name") or "?").upper())
+    dst_codec = aargs[aargs.index("-c:a:0") + 1]
+    dst_a = AUDIO_NAMES.get(dst_codec, dst_codec.upper())
+    lossless = dst_codec in ("flac", "alac")
+    warnings.append(f"Audio re-encoded {src_a} -> {dst_a}" + (" (lossless)." if lossless else
+                    " at high bitrate (needed to silence words)."))
+    warnings += notes
+    result = {"output": str(out), "how": how, "mutes": len(mutes), "cuts": len(cuts),
             "blackouts": len(blackouts), "blurs": len(blurs), "muted_scenes": len(mute_scenes),
             "parts_blurred": len(parts),
-            "removed_seconds": round(cut_total, 1), "notes": notes}
+            "removed_seconds": round(cut_total, 1), "notes": notes,
+            "original_duration": round(info.duration, 2),
+            "final_duration": round(got.duration if got else expected, 2),
+            "size_bytes": out.stat().st_size if out.exists() else 0,
+            "valid": ok, "problems": problems, "warnings": warnings,
+            "resolution": f"{got.width}x{got.height}" if got and got.width else ""}
+    return result

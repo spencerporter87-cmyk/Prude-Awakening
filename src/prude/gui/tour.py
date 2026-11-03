@@ -109,6 +109,16 @@ def run_tour(app, out_dir: Path, video=None):
         add(lambda: w.review.tabs.setCurrentIndex(1))
         add(lambda: shot("5-review-scenes"))
 
+        def export_shot():
+            from ..export import ExportOptions
+            from .export_dialog import ExportDialog
+            d = ExportDialog(video, w.info, ExportOptions(folder="", naming="plex_edition",
+                                                          edition="Family Night Edit"), True, 4.5,
+                             "Family Night Edit", w)
+            d.show()
+            QTimer.singleShot(500, lambda: (shot("5b-export", d), d.close()))
+        add(export_shot, 1000)
+
         def fake_render():
             w.renderp.start(Path(video).name, Path(video).with_name("demo (clean).mkv"), True,
                             w.project, w._filters, w.info.duration)
@@ -118,8 +128,14 @@ def run_tour(app, out_dir: Path, video=None):
         add(lambda: shot("6-rendering"))
         add(lambda: w.renderp.show_result(
             {"output": str(video), "mutes": 3, "cuts": 1, "blackouts": 0, "removed_seconds": 4.5,
-             "how": "video re-encoded on the graphics card (NVENC HEVC)",
-             "notes": ["Made subtitles from the dialogue: demo (clean).en.srt"]},
+             "how": "video re-encoded on the graphics card (NVENC HEVC)", "parts_blurred": 1,
+             "original_duration": 30.0, "final_duration": 25.5, "size_bytes": 3_400_000_000,
+             "resolution": "1920x1040", "valid": True, "problems": [],
+             "warnings": ["Video re-encoded (scenes were changed) at very high quality - not bit-for-bit "
+                          "identical to the original.",
+                          "Audio re-encoded Dolby Digital (AC3) -> Dolby Digital (AC3) at high bitrate "
+                          "(needed to silence words).",
+                          "Made subtitles from the dialogue: demo (clean).en.srt"]},
             w.project, w._filters, w.info.duration), 2500)
         add(lambda: w.renderp.player.seek_to(6.0), 1200)
         add(lambda: shot("7-done"))

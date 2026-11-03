@@ -938,9 +938,24 @@ class RenderPage(QWidget):
             bits.append(n(result["blurs"], "scene") + " blurred")
         if result.get("muted_scenes"):
             bits.append(n(result["muted_scenes"], "scene") + " silenced")
-        bits.append(result["how"])
         self.msg.setText(" · ".join(bits))
-        self.notes.setText("\n".join(result.get("notes", [])))
+        from ..export import human_size
+        rows = []
+        if result.get("original_duration"):
+            rows.append(f"<b>Length:</b> {fmt_time(result['original_duration'], False)} original → "
+                        f"{fmt_time(result.get('final_duration', 0), False)} clean copy")
+        if result.get("size_bytes"):
+            res = f" · {result['resolution']}" if result.get("resolution") else ""
+            rows.append(f"<b>File:</b> {human_size(result['size_bytes'])}{res}")
+        if result.get("valid") is False:
+            self.title.setText("⚠  Saved, but please check it")
+            rows += [f"<span style='color:#C8412B'>⚠ {p}</span>" for p in result.get("problems", [])]
+        elif "valid" in result:
+            rows.append("<span style='color:#3C7A30'>✓ Checked: the finished file opens, and its length "
+                        "and streams are as expected.</span>")
+        rows += [f"• {w}" for w in result.get("warnings", result.get("notes", []))]
+        self.notes.setTextFormat(Qt.RichText)
+        self.notes.setText("<br>".join(rows))
         self.cancel_btn.setVisible(False)
         for b in (self.play_btn, self.folder_btn, self.again_btn, self.review_btn, self.ext_btn):
             b.setVisible(True)

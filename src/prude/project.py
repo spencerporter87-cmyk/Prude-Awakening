@@ -10,6 +10,21 @@ from pathlib import Path
 from .paths import projects_dir
 
 
+SCHEMA = 2
+
+
+def migrate(d: dict) -> dict:
+    """Bring an older saved project up to the current layout without losing anything."""
+    import uuid
+    for kind in ("mutes", "scenes"):
+        for item in d.get(kind) or []:
+            item.setdefault("id", uuid.uuid4().hex[:12])
+            item.setdefault("on", True)
+            item.setdefault("origin", "manual" if item.get("manual") else "auto")
+    d["schema"] = SCHEMA
+    return d
+
+
 def _plain(o):
     """numpy numbers and paths -> plain JSON values."""
     if hasattr(o, "item"):
@@ -35,6 +50,8 @@ class Project:
     scenes: list = field(default_factory=list)          # {id,start,end,kind,label,score,thumb,on}
     scan_filters: dict = field(default_factory=dict)
     last_output: str = ""
+    exports: list = field(default_factory=list)          # summaries of finished exports
+    schema: int = SCHEMA
 
     @property
     def dir(self) -> Path:
@@ -51,7 +68,7 @@ class Project:
         p = projects_dir() / project_key(Path(source)) / "project.json"
         if p.exists():
             try:
-                d = json.loads(p.read_text(encoding="utf-8"))
+                d = migrate(json.loads(p.read_text(encoding="utf-8")))
                 d["source"] = source
                 return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
             except Exception:
