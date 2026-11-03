@@ -32,6 +32,8 @@ def _carry_over(new, old):
         n["id"] = (o or {}).get("id") or uuid.uuid4().hex[:8]
         if o is not None:
             n["on"] = o.get("on", True)
+            if o.get("action_set"):
+                n["action"], n["action_set"] = o.get("action"), True
             if o.get("edited"):
                 n["start"], n["end"], n["edited"] = o["start"], o["end"], True
         else:
@@ -97,8 +99,7 @@ def scan(project, filters, settings, progress=None, cancel=None, log=print, get_
         def sp(stage, f, m):
             if progress:
                 progress(stage, f, m)
-        found = scene_mod.watch(info, project.dir, mdir, filters.scenes, descriptions,
-                                filters.sensitivity, sp, cancel, log)
+        found = scene_mod.watch(info, project.dir, mdir, filters, sp, cancel, log)
         project.scenes = _carry_over(found, project.scenes)
     else:
         project.scenes = [s for s in project.scenes if s.get("manual")]

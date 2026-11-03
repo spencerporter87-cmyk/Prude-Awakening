@@ -9,24 +9,72 @@ from pathlib import Path
 from . import models
 from .media import Cancelled, ffmpeg, run, run_ffmpeg
 
-SCENE_CATEGORIES = [
-    ("nudity", "Nudity", "Exposed private parts (detected directly)"),
-    ("sexual", "Sex scenes", "Sexual activity, sensual scenes in bed"),
-    ("violence", "Violence", "Fights, shootings, stabbings, attacks"),
-    ("gore", "Blood and gore", "Bloody wounds, gore, dead bodies"),
+# ---------------------------------------------------------------- what can be found
+# Groups each have their own "how picky" slider and default action.
+SCENE_GROUPS = [
+    ("nudity", "Nudity", "Detected body part by body part. Swimsuits and underwear count as covered."),
+    ("sexual", "Sex and romance", "Sex scenes are split by whether nudity is shown."),
+    ("violence", "Violence and scary scenes", ""),
+    ("custom", "Your descriptions", ""),
 ]
-SCENE_NAMES = {k: n for k, n, _ in SCENE_CATEGORIES}
+SCENE_TYPES = [   # key, group, name, description, on by default in "everything"
+    ("nude_f_breasts", "nudity", "Female breasts", "Bare female breasts"),
+    ("nude_f_genitals", "nudity", "Female genitals", "Full-frontal female nudity"),
+    ("nude_m_genitals", "nudity", "Male genitals", "Full-frontal male nudity"),
+    ("nude_buttocks", "nudity", "Bare buttocks", "Male or female"),
+    ("nude_m_chest", "nudity", "Shirtless men", "Bare male chest (beach, sports…)"),
+    ("sex_nude", "sexual", "Sex scenes with nudity", "Sex where nudity is shown"),
+    ("sex_implied", "sexual", "Sex scenes without nudity", "Implied: under covers, clothed, cut away"),
+    ("kissing", "sexual", "Passionate kissing", "Making out, heavy kissing"),
+    ("suggestive", "sexual", "Suggestive scenes", "Lingerie, undressing, stripping"),
+    ("swimwear", "sexual", "Swimsuits and bikinis", "Beach and pool scenes"),
+    ("violence", "violence", "Violence", "Fights, shootings, stabbings, attacks"),
+    ("gore", "violence", "Blood and gore", "Bloody wounds, gore, dead bodies"),
+    ("scary", "violence", "Frightening scenes", "Horror, monsters, jump scares"),
+]
+TYPE_GROUP = {k: g for k, g, _n, _d in SCENE_TYPES}
+TYPE_NAME = {k: n for k, _g, n, _d in SCENE_TYPES}
+LEGACY = {"nudity": ["nude_f_breasts", "nude_f_genitals", "nude_m_genitals", "nude_buttocks"],
+          "sexual": ["sex_nude", "sex_implied"]}
+SCENE_NAMES = dict(TYPE_NAME, nudity="Nudity")
+# kept for older callers
+SCENE_CATEGORIES = [(k, n, d) for k, _g, n, d in SCENE_TYPES]
+
+NUDE_TYPES = {
+    "nude_f_breasts": ["FEMALE_BREAST_EXPOSED"],
+    "nude_f_genitals": ["FEMALE_GENITALIA_EXPOSED"],
+    "nude_m_genitals": ["MALE_GENITALIA_EXPOSED"],
+    "nude_buttocks": ["BUTTOCKS_EXPOSED", "ANUS_EXPOSED"],
+    "nude_m_chest": ["MALE_BREAST_EXPOSED"],
+}
+NUDE_CLASS_ORDER = ["FEMALE_BREAST_EXPOSED", "FEMALE_GENITALIA_EXPOSED", "MALE_GENITALIA_EXPOSED",
+                    "BUTTOCKS_EXPOSED", "ANUS_EXPOSED", "MALE_BREAST_EXPOSED"]
+NUDE_SHORT = {"nude_f_breasts": "female breasts", "nude_f_genitals": "female genitals",
+              "nude_m_genitals": "male genitals", "nude_buttocks": "bare buttocks",
+              "nude_m_chest": "shirtless man"}
 
 PROMPTS = {
-    "sexual": ["a couple having sex in bed", "two naked people in bed together",
-               "a sex scene in a movie", "people kissing passionately on a bed",
-               "a woman in lingerie in a bedroom"],
+    "sex": ["a couple having sex in bed", "two naked people in bed together",
+            "a sex scene in a movie", "lovers having sex under the bed sheets",
+            "a couple in bed making love"],
+    "kissing": ["two people kissing passionately", "a couple making out",
+                "lovers kissing intensely", "a couple kissing on a bed"],
+    "suggestive": ["a woman in lingerie", "a person undressing", "a striptease dancer",
+                   "a person posing seductively in underwear", "a man taking off his clothes"],
+    "swimwear": ["a woman in a bikini", "people in swimsuits at the beach",
+                 "a man in swim trunks at the pool", "people sunbathing in swimwear"],
     "violence": ["people in a violent fist fight", "a person being shot with a gun",
                  "a person being stabbed with a knife", "someone being beaten up",
                  "a violent brutal attack", "a shootout with guns firing"],
     "gore": ["a bloody wound", "a person covered in blood", "a gory dead body",
              "blood splattered everywhere", "a severed body part"],
+    "scary": ["a terrifying monster", "a scary scene from a horror movie", "a frightening ghost",
+              "a person screaming in terror", "a creepy demon"],
 }
+CLIP_FOR = {"sex_nude": "sex", "sex_implied": "sex", "kissing": "kissing", "suggestive": "suggestive",
+            "swimwear": "swimwear", "violence": "violence", "gore": "gore", "scary": "scary"}
+SWIM_NEUTRAL = ["people swimming in a pool", "a family at the beach", "kids playing at a water park",
+                "a person swimming laps", "surfers riding waves"]
 NEUTRAL = ["people talking in a room", "a person walking outside", "a landscape view",
            "a car driving on a road", "people eating dinner at a table",
            "a close-up of a person's face", "a busy city street", "an office with people working",
@@ -34,10 +82,11 @@ NEUTRAL = ["people talking in a room", "a person walking outside", "a landscape 
            "a person holding a phone", "children playing", "a kitchen", "a living room",
            "people laughing together", "a person sleeping in bed alone", "a sports game",
            "an animated cartoon scene", "a crowd of people", "a person driving a car",
-           "a couple hugging", "a beach with people in swimsuits", "a hospital room",
-           "soldiers marching", "a person holding a gun", "a police officer"]
-NUDE_CLASSES = {"FEMALE_BREAST_EXPOSED", "FEMALE_GENITALIA_EXPOSED",
-                "MALE_GENITALIA_EXPOSED", "BUTTOCKS_EXPOSED", "ANUS_EXPOSED"}
+           "a couple hugging", "a hospital room", "soldiers marching", "a person holding a gun",
+           "a police officer", "a couple talking in bed fully clothed", "a doctor examining a patient",
+           "people hugging goodbye", "a quick kiss on the cheek", "a wedding ceremony",
+           "a person getting dressed for work", "a fashion show", "a gym workout"]
+NUDE_CLASSES = set(NUDE_CLASS_ORDER) - {"MALE_BREAST_EXPOSED"}
 # sensitivity 1 (only obvious) .. 5 (flag anything suspicious)
 NUDE_THRESH = {1: 0.75, 2: 0.6, 3: 0.45, 4: 0.35, 5: 0.25}
 CLIP_THRESH = {1: 0.7, 2: 0.55, 3: 0.42, 4: 0.32, 5: 0.24}
@@ -107,12 +156,20 @@ class NudityScorer:
         from nudenet import NudeDetector
         self.det = NudeDetector()
 
-    def score(self, path):
-        best, label = 0.0, ""
+    def scores(self, path):
+        """Best confidence per class in NUDE_CLASS_ORDER."""
+        out = [0.0] * len(NUDE_CLASS_ORDER)
         for d in self.det.detect(str(path)) or []:
-            if d.get("class") in NUDE_CLASSES and d.get("score", 0) > best:
-                best, label = float(d["score"]), d["class"]
-        return best, label
+            c = d.get("class")
+            if c in NUDE_CLASS_ORDER:
+                i = NUDE_CLASS_ORDER.index(c)
+                out[i] = max(out[i], float(d.get("score", 0)))
+        return out
+
+    def score(self, path):
+        sc = self.scores(path)
+        best = max((v, c) for v, c in zip(sc, NUDE_CLASS_ORDER) if c in NUDE_CLASSES)
+        return best
 
 
 # ---------------------------------------------------------------- CLIP descriptions
@@ -173,10 +230,11 @@ class ClipScorer:
         return self._norm(self._out(self.vision, {"pixel_values": batch}, "image_embeds").astype(np.float32))
 
 
-def describe_scores(image_embs, scorer, categories, custom_lines):
-    """Per-frame probability for each description category (softmax over all prompts)."""
+def describe_scores(image_embs, scorer, clip_keys, custom_lines):
+    """Per-frame probability for each prompt group (softmax over all prompts, with many
+    everyday scenes - including swimming and beach scenes - as competition)."""
     import numpy as np
-    groups = {k: PROMPTS[k] for k in categories if k in PROMPTS}
+    groups = {k: PROMPTS[k] for k in clip_keys if k in PROMPTS}
     for line in custom_lines:
         groups[f"custom:{line}"] = [line, f"a movie scene of {line}"]
     if not groups or image_embs is None or len(image_embs) == 0:
@@ -185,8 +243,11 @@ def describe_scores(image_embs, scorer, categories, custom_lines):
     for k, ps in groups.items():
         prompts += ps
         owner += [k] * len(ps)
-    prompts += NEUTRAL
-    owner += [None] * len(NEUTRAL)
+    neutral = list(NEUTRAL) + ([] if "swimwear" in groups else SWIM_NEUTRAL + PROMPTS["swimwear"])
+    if "kissing" not in groups:
+        neutral += PROMPTS["kissing"][:2]
+    prompts += neutral
+    owner += [None] * len(neutral)
     text = scorer.embed_texts(prompts)
     logits = 100.0 * image_embs @ text.T
     logits -= logits.max(axis=1, keepdims=True)
@@ -272,13 +333,39 @@ def make_thumb(frame: Path, dest: Path, blur=False):
     return str(dest)
 
 
-def watch(info, work_dir: Path, models_dir, categories, custom_lines, sensitivity=3,
-          progress=None, cancel=None, log=print):
-    """Full visual scan (cached). Returns list of scene dicts."""
+def expand_types(keys):
+    out = []
+    for k in keys or []:
+        for t in LEGACY.get(k, [k]):
+            if t not in out:
+                out.append(t)
+    return out
+
+
+def _window(times, a, b):
+    return [i for i, t in enumerate(times) if a <= t <= b]
+
+
+def watch(info, work_dir: Path, models_dir, filters, progress=None, cancel=None, log=print):
+    """Full visual scan (cached). Returns a list of scene dicts with kind, group, label,
+    detail, start, end, score, action and thumbnails."""
     import numpy as np
-    custom_lines = [c.strip() for c in custom_lines if c.strip()]
-    want_clip = any(k in PROMPTS for k in categories) or bool(custom_lines)
-    want_nude = "nudity" in categories
+    types = expand_types(filters.scenes)
+    custom_lines = [c.strip() for c in (filters.scene_descriptions or "").splitlines() if c.strip()]
+    sens = dict(filters.scene_sensitivity or {})
+    acts = dict(filters.scene_actions or {})
+
+    def s_of(group):
+        return int(sens.get(group, filters.sensitivity))
+
+    def act_of(group):
+        return acts.get(group) or filters.scene_action
+
+    nude_types = [t for t in types if t in NUDE_TYPES]
+    sex_types = [t for t in types if t in ("sex_nude", "sex_implied")]
+    clip_keys = {CLIP_FOR[t] for t in types if t in CLIP_FOR}
+    want_clip = bool(clip_keys or custom_lines)
+    want_nude = bool(nude_types or sex_types)
     if not (want_clip or want_nude):
         return []
 
@@ -298,21 +385,22 @@ def watch(info, work_dir: Path, models_dir, categories, custom_lines, sensitivit
     cache = load_cache(cache_path)
     if len(cache.get("times", [])) != len(times):
         cache = {}
+    cache.pop("nude", None)   # older single-score cache
 
     if "bounds" not in cache:
         cache["bounds"] = np.array(shot_boundaries(frames, FPS, stage("analyze", 0, 0.1), cancel),
                                    dtype=np.float32)
-    if want_nude and "nude" not in cache:
+    if want_nude and "nude_cls" not in cache:
         scorer = NudityScorer()
-        vals = np.zeros(len(frames), dtype=np.float32)
+        vals = np.zeros((len(frames), len(NUDE_CLASS_ORDER)), dtype=np.float32)
         report = stage("analyze", 0.1, 0.55 if want_clip and "clip" not in cache else 1.0)
         for i, p in enumerate(frames):
             if cancel is not None and cancel.is_set():
                 raise Cancelled()
-            vals[i] = scorer.score(p)[0]
+            vals[i] = scorer.scores(p)
             if report and i % 20 == 0:
                 report(i / len(frames), f"Checking for nudity ({i} of {len(frames)} frames)")
-        cache["nude"] = vals
+        cache["nude_cls"] = vals
     if want_clip and "clip" not in cache:
         scorer = ClipScorer(Path(models_dir) / "clip")
         embs = []
@@ -329,22 +417,74 @@ def watch(info, work_dir: Path, models_dir, categories, custom_lines, sensitivit
     save_cache(cache_path, **cache)
 
     bounds = list(cache["bounds"])
+    tl = [float(t) for t in times]
     scenes = []
-    if want_nude:
-        thr = NUDE_THRESH.get(int(sensitivity), 0.45)
-        for a, b, peak, idx in build_segments(times, cache["nude"], thr, bounds, info.duration):
-            scenes.append({"kind": "nudity", "label": "Nudity", "start": a, "end": b,
-                           "score": round(peak, 2), "frame": str(frames[idx])})
+
+    def col(cls_names):
+        idx = [NUDE_CLASS_ORDER.index(c) for c in cls_names]
+        return cache["nude_cls"][:, idx].max(axis=1)
+
+    def add(kind, group, label, a, b, peak, idx, detail=""):
+        scenes.append({"kind": kind, "group": group, "label": label, "detail": detail,
+                       "start": a, "end": b, "score": round(float(peak), 2),
+                       "frame": str(frames[idx]), "action": act_of(group)})
+
+    # ---- nudity, body part by body part
+    if nude_types:
+        thr = NUDE_THRESH.get(s_of("nudity"), 0.45)
+        per_type = {t: col(NUDE_TYPES[t]) for t in nude_types}
+        combined = np.max(np.stack(list(per_type.values())), axis=0)
+        for a, b, peak, idx in build_segments(times, combined, thr, bounds, info.duration):
+            win = _window(tl, a, b)
+            found = [t for t in nude_types if win and float(per_type[t][win].max()) >= thr]
+            names = [NUDE_SHORT[t] for t in found] or ["nudity"]
+            label = "Shirtless man" if found == ["nude_m_chest"] else "Nudity"
+            add("nudity", "nudity", label, a, b, peak, idx, ", ".join(names))
+
+    # ---- scene descriptions (CLIP)
+    probs = {}
     if want_clip:
         scorer = ClipScorer(Path(models_dir) / "clip")
-        probs = describe_scores(cache["clip"].astype(np.float32), scorer, categories, custom_lines)
-        thr = CLIP_THRESH.get(int(sensitivity), 0.42)
-        for k, sc in probs.items():
-            label = SCENE_NAMES.get(k) or ("“" + k.split(":", 1)[1] + "”")
-            for a, b, peak, idx in build_segments(times, sc, thr, bounds, info.duration,
-                                                   min_hits=2, strong=min(0.95, thr + 0.2)):
-                scenes.append({"kind": k, "label": label, "start": a, "end": b,
-                               "score": round(peak, 2), "frame": str(frames[idx])})
+        probs = describe_scores(cache["clip"].astype(np.float32), scorer, clip_keys, custom_lines)
+    explicit = col(sorted(NUDE_CLASSES)) if want_nude else None
+    for key, sc in probs.items():
+        if key.startswith("custom:"):
+            group, kinds = "custom", [key]
+        else:
+            group = TYPE_GROUP.get(next((t for t in types if CLIP_FOR.get(t) == key), key), "sexual")
+            kinds = [key]
+        thr = CLIP_THRESH.get(s_of(group), 0.42)
+        for a, b, peak, idx in build_segments(times, sc, thr, bounds, info.duration,
+                                               min_hits=2, strong=min(0.95, thr + 0.2)):
+            if key == "sex":
+                win = _window(tl, a, b)
+                nthr = NUDE_THRESH.get(s_of("sexual"), 0.45) - 0.05
+                nude = explicit is not None and win and float(explicit[win].max()) >= nthr
+                kind = "sex_nude" if nude else "sex_implied"
+                if kind not in sex_types:
+                    continue
+                add(kind, "sexual", "Sex scene" + (" with nudity" if nude else " (no nudity shown)"),
+                    a, b, peak, idx)
+            elif key.startswith("custom:"):
+                add(key, "custom", "“" + key.split(":", 1)[1] + "”", a, b, peak, idx)
+            else:
+                add(key, TYPE_GROUP.get(key, group), TYPE_NAME.get(key, key), a, b, peak, idx)
+
+    # ---- a nudity flag inside a sex scene becomes part of that scene
+    sexes = [x for x in scenes if x["kind"] in ("sex_nude", "sex_implied")]
+    keep = []
+    for x in scenes:
+        if x["kind"] == "nudity":
+            host = next((y for y in sexes if min(x["end"], y["end"]) - max(x["start"], y["start"])
+                         > 0.5 * (x["end"] - x["start"])), None)
+            if host:
+                host["start"], host["end"] = min(host["start"], x["start"]), max(host["end"], x["end"])
+                host["kind"], host["label"] = "sex_nude", "Sex scene with nudity"
+                host["detail"] = ", ".join(filter(None, [host.get("detail"), x["detail"]]))
+                continue
+        keep.append(x)
+    scenes = keep
+
     for s in scenes:
         stem = f"{s['kind'].replace(':', '_').replace(' ', '_')[:40]}_{int(s['start'] * 10)}"
         s["thumb"] = make_thumb(Path(s["frame"]), work_dir / "thumbs" / f"{stem}.jpg")

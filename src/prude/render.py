@@ -114,11 +114,27 @@ def build_audio_chain(info, track, mutes, blackouts, cuts, mute_mode):
     return graph
 
 
-def build_video_chain(blackouts, cuts):
-    if not blackouts and not cuts:
+ACTIONS = ("cut", "black", "black_keep", "blur", "mute")
+
+
+def scene_ranges(project, default_action):
+    """{action: merged ranges} for the ticked scenes, each with its own action."""
+    out = {a: [] for a in ACTIONS}
+    for s in project.active_scenes():
+        a = s.get("action") or default_action
+        out[a if a in out else "cut"].append((s["start"], s["end"]))
+    return {a: merge_ranges(r) for a, r in out.items()}
+
+
+def build_video_chain(blackouts, cuts, blurs=()):
+    if not blackouts and not cuts and not blurs:
         return []
     chain = "[0:v:0]"
     parts = []
+    if blurs:
+        parts.append("boxblur=luma_radius='min(w,h)/14':luma_power=3:"
+                     "chroma_radius='min(cw,ch)/14':chroma_power=3:"
+                     f"enable='{_between(blurs)}'")
     if blackouts:
         parts.append(f"drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill:enable='{_between(blackouts)}'")
     if cuts:
@@ -150,9 +166,11 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
     tmp_files = []
 
     mutes = merge_ranges((m["start"], m["end"]) for m in project.active_mutes())
-    scenes = merge_ranges((s["start"], s["end"]) for s in project.active_scenes())
-    cuts = scenes if filters.scene_action == "cut" else []
-    blackouts = scenes if filters.scene_action != "cut" else []
+    by_action = scene_ranges(project, filters.scene_action)
+    cuts, blurs = by_action["cut"], by_action["blur"]
+    silent_blacks, sound_blacks = by_action["black"], by_action["black_keep"]
+    blackouts = merge_ranges(silent_blacks + sound_blacks)
+    mute_scenes = by_action["mute"]
     cut_total = sum(b - a for a, b in cuts)
     if cuts and info.duration and info.duration - cut_total < 1.0:
         raise MediaError("Every part of the movie is marked for removal, so nothing would be left. "
@@ -192,8 +210,9 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
                 notes.append(f"Made subtitles from the dialogue: {side.name}")
 
     # ---- filter graph
-    graph = build_audio_chain(info, track, mutes, blackouts, cuts, filters.mute_mode)
-    vgraph = build_video_chain(blackouts, cuts)
+    graph = build_audio_chain(info, track, mutes, merge_ranges(silent_blacks + mute_scenes), cuts,
+                              filters.mute_mode)
+    vgraph = build_video_chain(blackouts, cuts, blurs)
     graph += vgraph
     graph_text = ";".join(graph)
 
@@ -243,7 +262,8 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
         cmd += ["-movflags", "+faststart"]
     cmd += [str(out)]
 
-    log(f"Rendering: {how}; {len(mutes)} mutes, {len(cuts)} cuts, {len(blackouts)} blacked-out scenes.")
+    log(f"Rendering: {how}; {len(mutes)} mutes, {len(cuts)} cuts, {len(blackouts)} blacked out, "
+        f"{len(blurs)} blurred, {len(mute_scenes)} scenes muted.")
     try:
         log("ffmpeg " + " ".join(f'"{c}"' if " " in str(c) else str(c) for c in cmd[1:])[:4000])
         run_ffmpeg(cmd, max(1.0, info.duration - cut_total), progress, cancel,
@@ -255,4 +275,5 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
         for f in tmp_files:
             Path(f).unlink(missing_ok=True)
     return {"output": str(out), "how": how, "mutes": len(mutes), "cuts": len(cuts),
-            "blackouts": len(blackouts), "removed_seconds": round(cut_total, 1), "notes": notes}
+            "blackouts": len(blackouts), "blurs": len(blurs), "muted_scenes": len(mute_scenes),
+            "removed_seconds": round(cut_total, 1), "notes": notes}

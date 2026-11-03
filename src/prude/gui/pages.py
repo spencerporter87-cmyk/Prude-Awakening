@@ -16,12 +16,15 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QDia
 from .. import models
 from ..paths import NO_WINDOW, find_tool
 from ..pipeline import STAGES
-from ..scenes import SCENE_CATEGORIES, SCENE_NAMES
+from ..scenes import SCENE_GROUPS, SCENE_TYPES
 from ..settings import FilterOptions
 from ..words import CATEGORIES, CATEGORY_NAMES
-from ..render import merge_ranges
+from ..render import merge_ranges, scene_ranges
+
+INTIMATE = {"nudity", "sexual", "sex_nude", "sex_implied", "suggestive", "swimwear", "kissing"}
 from ..subtitles import TimeMap
 from .player import HAVE_MM, Player
+from .scenepicker import SceneGroup, action_combo
 from .wordpicker import WordCategory
 from .widgets import (Card, DropZone, StageRow, TimeEdit, button, fmt_time, icon_pixmap, label)
 
@@ -204,46 +207,16 @@ class SetupPage(QWidget):
         grid.addWidget(lang, 0, 0)
 
         # ---- scenes card
-        sc = Card("Scenes", "Parts of the movie to remove. You'll review every one before anything is cut.")
-        self.scene_boxes = {}
-        for key, name, desc in SCENE_CATEGORIES:
-            cb = QCheckBox(name)
-            cb.toggled.connect(self._changed)
-            self.scene_boxes[key] = cb
-            row = QHBoxLayout()
-            row.addWidget(cb)
-            row.addWidget(label(desc, "Small"), 1)
-            sc.lay.addLayout(row)
-        sc.lay.addSpacing(6)
-        sc.lay.addWidget(label("Describe anything else to find (one per line)", None))
-        self.describe = QPlainTextEdit()
-        self.describe.setPlaceholderText("e.g.\nsmoking a cigarette\na person vomiting\na large spider")
-        self.describe.setFixedHeight(76)
-        self.describe.textChanged.connect(self._changed)
-        sc.lay.addWidget(self.describe)
-        srow = QHBoxLayout()
-        srow.addWidget(label("How picky", None))
-        srow.addStretch()
-        self.sens_val = label("", "Muted")
-        srow.addWidget(self.sens_val)
-        sc.lay.addLayout(srow)
-        self.sens = QSlider(Qt.Horizontal)
-        self.sens.setRange(1, 5)
-        self.sens.setPageStep(1)
-        self.sens.setTickPosition(QSlider.TicksBelow)
-        names = {1: "Only obvious scenes", 2: "Fewer flags", 3: "Balanced", 4: "More flags",
-                 5: "Flag anything suspicious"}
-        self.sens.valueChanged.connect(lambda v: (self.sens_val.setText(names[v]), self._changed()))
-        sc.lay.addWidget(self.sens)
-        sc.lay.addSpacing(6)
-        sc.lay.addWidget(label("What happens to a removed scene", None))
-        self.act_cut = QRadioButton("Cut it out (the movie gets a little shorter)")
-        self.act_black = QRadioButton("Black screen and silence (same length)")
-        g2 = QButtonGroup(self)
-        for r in (self.act_cut, self.act_black):
-            g2.addButton(r)
-            r.toggled.connect(self._changed)
-            sc.lay.addWidget(r)
+        sc = Card("Scenes", "Parts of the movie to remove. You'll review every one before anything is changed, "
+                            "and can change what happens to each one.")
+        self.groups = {}
+        for g, gname, gdesc in SCENE_GROUPS:
+            types = [(k, n, d) for k, tg, n, d in SCENE_TYPES if tg == g]
+            sg = SceneGroup(g, gname, gdesc if g != "custom" else "Anything else to find", types,
+                            text_box=(g == "custom"))
+            sg.changed.connect(self._changed)
+            self.groups[g] = sg
+            sc.lay.addWidget(sg)
         self.scene_note = label("", "Small", wrap=True)
         sc.lay.addWidget(self.scene_note)
         sc.lay.addStretch()
@@ -299,12 +272,11 @@ class SetupPage(QWidget):
         self.pad.setValue(int(round(f.padding * 100)))
         self.pad_val.setText(f"{f.padding:.2f} s")
         (self.mute_center if f.mute_mode == "center" else self.mute_all).setChecked(True)
-        for k, cb in self.scene_boxes.items():
-            cb.setChecked(k in f.scenes)
-        self.describe.setPlainText(f.scene_descriptions)
-        self.sens.setValue(int(f.sensitivity))
-        self.sens.valueChanged.emit(self.sens.value())
-        (self.act_black if f.scene_action == "black" else self.act_cut).setChecked(True)
+        chosen = set(f.scenes)
+        for g, sg in self.groups.items():
+            sg.set_state(chosen, (f.scene_sensitivity or {}).get(g, f.sensitivity),
+                         (f.scene_actions or {}).get(g, f.scene_action),
+                         f.scene_descriptions if g == "custom" else "")
         self._loading = was
         self._update_notes()
 
@@ -316,10 +288,12 @@ class SetupPage(QWidget):
             allow_words=self.allow.text().strip(),
             padding=self.pad.value() / 100,
             mute_mode="center" if self.mute_center.isChecked() else "all",
-            scenes=[k for k, cb in self.scene_boxes.items() if cb.isChecked()],
-            scene_descriptions=self.describe.toPlainText().strip(),
-            sensitivity=self.sens.value(),
-            scene_action="black" if self.act_black.isChecked() else "cut")
+            scenes=[k for sg in self.groups.values() for k in sg.selected()],
+            scene_descriptions=self.groups["custom"].text_value(),
+            sensitivity=3,
+            scene_action="cut",
+            scene_sensitivity={g: sg.sensitivity() for g, sg in self.groups.items()},
+            scene_actions={g: sg.action_value() for g, sg in self.groups.items()})
 
     def _all_words(self, on):
         was = self._loading
@@ -344,8 +318,8 @@ class SetupPage(QWidget):
         f = self.filters()
         any_scene = bool(f.scenes or f.scene_descriptions)
         if any_scene:
-            self.scene_note.setText("Removing scenes means the video is re-encoded when saving "
-                                    "(very high quality; faster with an NVIDIA card).")
+            self.scene_note.setText("Cutting, blacking out or blurring scenes means the video is re-encoded "
+                                    "when saving (very high quality; faster with an NVIDIA card).")
         else:
             self.scene_note.setText("No scenes selected: the picture is copied untouched — no quality change.")
         self.scan_btn.setEnabled(bool(f.words or f.custom_words or any_scene))
@@ -472,6 +446,8 @@ class SceneRow(QFrame):
         head = QHBoxLayout()
         t = label(scene.get("label", "Scene"), "H2")
         head.addWidget(t)
+        if scene.get("detail"):
+            head.addWidget(label(f"({scene['detail']})", "Muted"))
         if scene.get("score") is not None and not scene.get("manual"):
             conf = int(float(scene["score"]) * 100)
             head.addWidget(label(f"{conf}% sure", "Muted"))
@@ -491,10 +467,14 @@ class SceneRow(QFrame):
         btns = QHBoxLayout()
         btns.addWidget(button("▶  Play", None, lambda: on_play(self.s) if on_play else
                               play_clip(source, self.s["start"], self.s["end"], scene.get("label", "Scene"))))
-        self.chk = QCheckBox("Remove this scene")
+        self.chk = QCheckBox("Change this scene:")
         self.chk.setChecked(scene.get("on", True))
         self.chk.toggled.connect(self._toggle)
         btns.addWidget(self.chk)
+        self.act = action_combo(scene.get("action") or "cut")
+        self.act.setEnabled(scene.get("on", True))
+        self.act.currentIndexChanged.connect(self._action)
+        btns.addWidget(self.act)
         btns.addStretch()
         col.addLayout(btns)
         lay.addLayout(col, 1)
@@ -521,6 +501,11 @@ class SceneRow(QFrame):
 
     def _toggle(self, on):
         self.s["on"] = on
+        self.act.setEnabled(on)
+        self.on_change()
+
+    def _action(self, _i):
+        self.s["action"], self.s["action_set"] = self.act.currentData(), True
         self.on_change()
 
 
@@ -670,7 +655,7 @@ class ReviewPage(QWidget):
             self.scene_list.addWidget(label(
                 "No scenes to remove. (Turn on scene options in settings to look for some.)", "Muted"))
         for s in self.project.scenes:
-            row = SceneRow(s, self.project.source, self.blurred and s.get("kind") in ("nudity", "sexual"),
+            row = SceneRow(s, self.project.source, self.blurred and s.get("kind") in INTIMATE,
                            self._scene_changed, self._play)
             self.scene_rows.append(row)
             self.scene_list.addWidget(row)
@@ -680,7 +665,7 @@ class ReviewPage(QWidget):
     def _toggle_blur(self, show):
         self.blurred = not show
         for row in getattr(self, "scene_rows", []):
-            row.set_blur(self.blurred and row.s.get("kind") in ("nudity", "sexual"))
+            row.set_blur(self.blurred and row.s.get("kind") in INTIMATE)
 
     def _item_changed(self, item):
         if item.column() == 0:
@@ -748,10 +733,9 @@ class ReviewPage(QWidget):
 
     def _refresh_timeline(self):
         p = self.project
-        active = merge_ranges((s["start"], s["end"]) for s in p.scenes if s.get("on", True))
-        cut = self.filters.scene_action == "cut"
-        self.player.set_filters(merge_ranges((m["start"], m["end"]) for m in p.mutes if m.get("on", True)),
-                                active if cut else [], [] if cut else active)
+        r = scene_ranges(p, self.filters.scene_action)
+        mutes = merge_ranges([(m["start"], m["end"]) for m in p.mutes if m.get("on", True)] + r["mute"])
+        self.player.set_filters(mutes, r["cut"], r["black"], r["blur"], r["black_keep"])
         dur = self.info.duration if self.info else max([1.0] + [x["end"] for x in p.mutes + p.scenes])
         self.player.timeline.set_plan(dur, p.mutes, p.scenes, self.filters.scene_action)
 
@@ -759,12 +743,17 @@ class ReviewPage(QWidget):
         self._refresh_timeline()
         mutes = [m for m in self.project.mutes if m.get("on", True)]
         scenes = [s for s in self.project.scenes if s.get("on", True)]
-        secs = sum(s["end"] - s["start"] for s in scenes)
         parts = [f"{len(mutes)} of {len(self.project.mutes)} words will be silenced"]
         if self.project.scenes:
-            verb = "cut out" if self.filters.scene_action == "cut" else "blacked out"
-            parts.append(f"{len(scenes)} of {len(self.project.scenes)} scenes {verb} ({fmt_time(secs, False)})")
-        if scenes:
+            by = {}
+            for s in scenes:
+                a = s.get("action") or self.filters.scene_action
+                by[a] = by.get(a, 0) + 1
+            names = {"cut": "cut", "black": "blacked out", "black_keep": "blacked out (sound kept)",
+                     "blur": "blurred", "mute": "silenced"}
+            what = ", ".join(f"{n} {names[a]}" for a, n in by.items()) or "none changed"
+            parts.append(f"{len(scenes)} of {len(self.project.scenes)} scenes ({what})")
+        if any((s.get("action") or self.filters.scene_action) != "mute" for s in scenes):
             parts.append("video will be re-encoded at very high quality")
         else:
             parts.append("picture copied untouched")
@@ -773,20 +762,25 @@ class ReviewPage(QWidget):
 
 
 def clean_timeline(project, filters, duration):
-    """(new_duration, mutes, blackouts, cut_points) for the clean copy's timeline."""
-    scenes = merge_ranges((s["start"], s["end"]) for s in project.active_scenes())
+    """(new_duration, mutes, other_scenes, cut_points) for the clean copy's timeline."""
+    r = scene_ranges(project, filters.scene_action)
     labels = {round(s["start"], 2): s.get("label", "Scene") for s in project.active_scenes()}
-    cuts = scenes if filters.scene_action == "cut" else []
+    cuts = r["cut"]
     tm = TimeMap(cuts)
     mutes = []
     for m in project.active_mutes():
         a, b = tm(m["start"]), tm(m["end"])
         if a is not None and b is not None:
             mutes.append({"start": a, "end": b, "words": m.get("words", "")})
-    blackouts = [] if cuts else [{"start": a, "end": b, "label": labels.get(round(a, 2), "Scene")}
-                                 for a, b in scenes]
+    others = []
+    for action in ("black", "black_keep", "blur", "mute"):
+        for a, b in r[action]:
+            ma, mb = tm(a), tm(b)
+            if ma is not None and mb is not None:
+                others.append({"start": ma, "end": mb, "action": action,
+                               "label": labels.get(round(a, 2), "Scene")})
     cut_points = [(tm(a), b - a, labels.get(round(a, 2), "Scene")) for a, b in cuts]
-    return max(1.0, duration - sum(b - a for a, b in cuts)), mutes, blackouts, cut_points
+    return max(1.0, duration - sum(b - a for a, b in cuts)), mutes, others, cut_points
 
 
 # =========================================================================== Render / done
@@ -836,7 +830,7 @@ class RenderPage(QWidget):
         from .timeline import Timeline, legend
         self.progress_tl = Timeline()
         tcl.addWidget(self.progress_tl)
-        tcl.addWidget(legend("result"))
+        tcl.addWidget(legend("progress"))
         lay.addWidget(self.tl_card)
         self.notes = label("", "Muted", wrap=True)
         lay.addWidget(self.notes)
@@ -930,6 +924,10 @@ class RenderPage(QWidget):
             bits.append(n(result["cuts"], "scene") + f" cut ({fmt_time(result['removed_seconds'], False)} removed)")
         if result["blackouts"]:
             bits.append(n(result["blackouts"], "scene") + " blacked out")
+        if result.get("blurs"):
+            bits.append(n(result["blurs"], "scene") + " blurred")
+        if result.get("muted_scenes"):
+            bits.append(n(result["muted_scenes"], "scene") + " silenced")
         bits.append(result["how"])
         self.msg.setText(" · ".join(bits))
         self.notes.setText("\n".join(result.get("notes", [])))

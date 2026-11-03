@@ -15,7 +15,7 @@ from ..paths import app_data_dir
 from ..pipeline import render_project, scan
 from ..project import Project
 from ..render import output_path
-from ..scenes import PROMPTS
+from ..scenes import CLIP_FOR
 from ..settings import FilterOptions, Settings
 from .pages import HomePage, RenderPage, ReviewPage, ScanPage, SetupPage
 from .settings_dialog import SettingsDialog
@@ -213,7 +213,7 @@ class MainWindow(QMainWindow):
         mdir = self.settings.models_path
         have_words = self.project.has_transcript(self.project.audio_track)
         want_scenes = bool(f.scenes or f.scene_descriptions)
-        want_clip = any(k in PROMPTS for k in f.scenes) or bool(f.scene_descriptions.strip())
+        want_clip = any(k in CLIP_FOR for k in f.scenes) or bool(f.scene_descriptions.strip())
         need = 0.0
         name = self.settings.speech_model or ("large-v3" if self.gpu_present() else "small.en")
         if not have_words and not models.whisper_ready(name, mdir):

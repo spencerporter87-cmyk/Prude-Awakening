@@ -14,25 +14,40 @@ class FilterOptions:
     allow_words: str = ""
     padding: float = 0.15
     mute_mode: str = "all"            # all | center
-    scenes: list = field(default_factory=list)   # nudity, sexual, violence, gore
+    scenes: list = field(default_factory=list)   # scene type keys, see scenes.SCENE_TYPES
     scene_descriptions: str = ""      # one per line
-    sensitivity: int = 3              # 1..5
-    scene_action: str = "cut"         # cut | black
+    sensitivity: int = 3              # 1..5, default for groups without their own
+    scene_action: str = "cut"         # default action: cut | black | blur | mute
+    scene_sensitivity: dict = field(default_factory=dict)   # group -> 1..5
+    scene_actions: dict = field(default_factory=dict)       # group -> action
 
     @classmethod
     def from_dict(cls, d):
         known = {k: v for k, v in (d or {}).items() if k in cls.__dataclass_fields__}
-        return cls(**known)
+        f = cls(**known)
+        legacy = {"nudity": ["nude_f_breasts", "nude_f_genitals", "nude_m_genitals", "nude_buttocks"],
+                  "sexual": ["sex_nude", "sex_implied"]}
+        out = []
+        for k in f.scenes:
+            for t in legacy.get(k, [k]):
+                if t not in out:
+                    out.append(t)
+        f.scenes = out
+        return f
 
 
+NUDITY = ["nude_f_breasts", "nude_f_genitals", "nude_m_genitals", "nude_buttocks"]
 BUILTIN_PRESETS = {
     "Family night": FilterOptions(words=["strong", "blasphemy", "sexual", "slurs"],
-                                  scenes=["nudity", "sexual"], sensitivity=3),
+                                  scenes=NUDITY + ["sex_nude", "sex_implied"], sensitivity=3),
     "Kids": FilterOptions(words=["strong", "blasphemy", "sexual", "slurs", "mild"],
-                          scenes=["nudity", "sexual", "violence", "gore"], sensitivity=4),
+                          scenes=NUDITY + ["sex_nude", "sex_implied", "kissing", "suggestive",
+                                           "violence", "gore", "scary"], sensitivity=4),
     "Language only": FilterOptions(words=["strong", "blasphemy", "sexual", "slurs"], scenes=[]),
     "Everything": FilterOptions(words=["strong", "blasphemy", "sexual", "slurs", "mild"],
-                                scenes=["nudity", "sexual", "violence", "gore"], sensitivity=5),
+                                scenes=NUDITY + ["nude_m_chest", "sex_nude", "sex_implied", "kissing",
+                                                 "suggestive", "swimwear", "violence", "gore", "scary"],
+                                sensitivity=5),
 }
 
 

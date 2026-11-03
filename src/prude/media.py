@@ -37,7 +37,7 @@ def run(cmd, **kw):
 def _fmt_left(sec):
     sec = int(max(0, sec))
     if sec < 60:
-        return "under a minute"
+        return "less than a minute"
     h, m = sec // 3600, sec % 3600 // 60
     return f"{h} h {m:02d} min" if h else f"{m} min"
 
@@ -95,7 +95,8 @@ def run_ffmpeg(cmd, duration, progress=None, cancel=None, label="Working", fps=N
                 pass
             elapsed = time.time() - t0
             if frac > 0.01:
-                bits.append(f"about {_fmt_left(elapsed / frac * (1 - frac))} left")
+                left = elapsed / frac * (1 - frac)
+                bits.append(f"{_fmt_left(left)} left" if left < 60 else f"about {_fmt_left(left)} left")
             elif elapsed > 2:
                 bits.append("starting up…")
             progress(frac, " · ".join(bits))

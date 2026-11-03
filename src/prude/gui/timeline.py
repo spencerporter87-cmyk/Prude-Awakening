@@ -10,6 +10,11 @@ from .widgets import fmt_time
 AMBER = QColor("#E39B2D")
 CUT = QColor("#C8412B")
 BLACK = QColor("#2A1B2E")
+BLUR = QColor("#7B61B0")
+MUTE = QColor("#B5762A")
+ACTION_COLOR = {"cut": CUT, "black": BLACK, "black_keep": BLACK, "blur": BLUR, "mute": MUTE}
+ACTION_WORD = {"cut": "✂ Cut out", "black": "⬛ Black screen + silence", "black_keep": "⬛ Black screen, sound kept",
+               "blur": "◌ Blurred, sound kept", "mute": "🔇 Sound silenced"}
 OFF = QColor("#C9BBAA")
 TRACK = QColor("#F1E9DD")
 
@@ -53,7 +58,7 @@ class Timeline(QWidget):
         """Clean copy: silenced words, blacked-out scenes, and markers where scenes were cut."""
         self.mode, self.duration, self.action = "result", max(1.0, float(duration)), "result"
         self.mutes = [dict(m, on=True) for m in mutes]
-        self.scenes = [dict(s, on=True) for s in blackouts]
+        self.scenes = [dict(s, on=True, action=s.get("action", "black")) for s in blackouts]
         self.cut_points = list(cut_points)
         self.update()
 
@@ -107,7 +112,7 @@ class Timeline(QWidget):
             on = s.get("on", True)
             if on:
                 p.setPen(Qt.NoPen)
-                p.setBrush(CUT if self.action == "cut" else BLACK)
+                p.setBrush(ACTION_COLOR.get(s.get("action") or self.action, CUT))
             else:
                 p.setPen(QPen(OFF, 1.2, Qt.DashLine))
                 p.setBrush(Qt.NoBrush)
@@ -163,8 +168,10 @@ class Timeline(QWidget):
         p.end()
 
     def _scene_tip(self, s):
-        verb = {"cut": "✂ Cut out", "black": "⬛ Blacked out", "result": "⬛ Blacked out"}.get(self.action, "")
+        verb = ACTION_WORD.get(s.get("action") or self.action, "")
         state = verb if s.get("on", True) else "Kept (unticked)"
+        if s.get("detail"):
+            state = f"{s['detail']} · {state}"
         return f"{fmt_time(s['start'])} – {fmt_time(s['end'])}\n{s.get('label', 'Scene')} · {state}"
 
     # ------------------------------------------------------------ mouse
@@ -216,11 +223,16 @@ def legend(mode="plan", action="cut"):
 
     sw(AMBER.name(), "Silenced word")
     if mode == "plan":
-        sw(CUT.name() if action == "cut" else BLACK.name(), "Scene cut out" if action == "cut" else "Scene blacked out")
+        sw(CUT.name(), "Cut")
+        sw(BLACK.name(), "Black screen")
+        sw(BLUR.name(), "Blurred")
+        sw(MUTE.name(), "Scene silenced")
         sw(OFF.name(), "Kept (unticked)", outline=True)
     else:
         sw(CUT.name(), "Where a scene was cut")
-        sw(BLACK.name(), "Blacked out")
-    sw(TEAL, "Now playing")
+        sw(BLACK.name(), "Black screen")
+        sw(BLUR.name(), "Blurred")
+        sw(MUTE.name(), "Scene silenced")
+    sw(TEAL, "Saved so far" if mode == "progress" else "Now playing")
     lay.addStretch()
     return w

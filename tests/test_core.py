@@ -220,3 +220,112 @@ def test_every_group_parses():
     for key, _n, _d in CATEGORIES:
         groups = category_groups(key)
         assert groups and all(label and pats for label, pats in groups)
+
+
+# ---------------------------------------------------------------- granular scenes
+def _fake_models(monkeypatch, nude_rows, clip):
+    """nude_rows: {frame_index: {CLASS: score}}, clip: {key: {frame_index: prob}}"""
+    import numpy as np
+    from prude import scenes as sm
+
+    class FakeNude:
+        def scores(self, path):
+            i = int(Path(path).stem) - 1
+            row = nude_rows.get(i, {})
+            return [row.get(c, 0.0) for c in sm.NUDE_CLASS_ORDER]
+
+    class FakeClip:
+        def __init__(self, *_a):
+            pass
+
+        def embed_images(self, paths):
+            return np.zeros((len(paths), 4), dtype=np.float32)
+
+    def fake_describe(embs, scorer, keys, custom):
+        n = len(embs)
+        out = {}
+        for k in list(keys) + [f"custom:{c}" for c in custom]:
+            arr = np.zeros(n, dtype=np.float32)
+            for i, v in clip.get(k, {}).items():
+                arr[i] = v
+            out[k] = arr
+        return out
+
+    monkeypatch.setattr(sm, "NudityScorer", FakeNude)
+    monkeypatch.setattr(sm, "ClipScorer", FakeClip)
+    monkeypatch.setattr(sm, "describe_scores", fake_describe)
+    monkeypatch.setattr(sm.models, "clip_ready", lambda d: True)
+
+
+def _watch(media_dir, tmp_path, f):
+    from prude import scenes as sm
+    info = probe(media_dir / "movie51.mkv")
+    return sm.watch(info, tmp_path / "work", tmp_path / "models", f)
+
+
+def test_nudity_by_body_part(media_dir, tmp_path, monkeypatch):
+    _fake_models(monkeypatch, {3: {"FEMALE_BREAST_EXPOSED": 0.9}, 4: {"FEMALE_BREAST_EXPOSED": 0.8},
+                               12: {"MALE_BREAST_EXPOSED": 0.9}}, {})
+    f = FilterOptions(words=[], scenes=["nude_f_breasts", "nude_m_genitals"])
+    found = _watch(media_dir, tmp_path, f)
+    assert len(found) == 1 and found[0]["detail"] == "female breasts"   # shirtless man not selected
+    f.scenes = ["nude_m_chest"]
+    found = _watch(media_dir, tmp_path, f)
+    assert [x["label"] for x in found] == ["Shirtless man"]
+
+
+def test_sex_with_and_without_nudity(media_dir, tmp_path, monkeypatch):
+    clip = {"sex": {2: 0.8, 3: 0.85, 4: 0.8, 14: 0.8, 15: 0.9, 16: 0.8}}
+    _fake_models(monkeypatch, {3: {"FEMALE_BREAST_EXPOSED": 0.9}}, clip)
+    f = FilterOptions(words=[], scenes=["sex_nude", "sex_implied"])
+    kinds = sorted(x["kind"] for x in _watch(media_dir, tmp_path, f))
+    assert kinds == ["sex_implied", "sex_nude"]
+    f.scenes = ["sex_implied"]
+    assert [x["kind"] for x in _watch(media_dir, tmp_path, f)] == ["sex_implied"]
+    # nudity flagged inside a sex scene is folded into it, not listed twice
+    f.scenes = ["sex_nude", "nude_f_breasts"]
+    found = _watch(media_dir, tmp_path, f)
+    assert [x["kind"] for x in found] == ["sex_nude"] and "female breasts" in found[0]["detail"]
+
+
+def test_group_sensitivity_and_actions(media_dir, tmp_path, monkeypatch):
+    clip = {"violence": {5: 0.5, 6: 0.5}, "swimwear": {10: 0.6, 11: 0.6}}
+    _fake_models(monkeypatch, {}, clip)
+    f = FilterOptions(words=[], scenes=["violence", "swimwear"],
+                      scene_sensitivity={"violence": 1, "sexual": 4},
+                      scene_actions={"sexual": "blur", "violence": "cut"})
+    found = _watch(media_dir, tmp_path, f)
+    assert [(x["kind"], x["action"]) for x in found] == [("swimwear", "blur")]   # violence too faint at 1
+
+
+def test_mixed_scene_actions_render(media_dir, fake_words, tmp_path):
+    f = FilterOptions(words=["mild"], scene_action="cut")
+    p = _project(media_dir / "movie51.mkv", fake_words)
+    pipeline.find_word_mutes(p, f)
+    p.scenes = [
+        {"id": "a", "kind": "violence", "label": "V", "start": 1.0, "end": 3.0, "on": True, "action": "cut"},
+        {"id": "b", "kind": "swimwear", "label": "S", "start": 6.0, "end": 8.0, "on": True, "action": "blur"},
+        {"id": "c", "kind": "kissing", "label": "K", "start": 11.0, "end": 13.0, "on": True, "action": "black"},
+        {"id": "d", "kind": "scary", "label": "F", "start": 15.5, "end": 16.5, "on": True, "action": "mute"},
+    ]
+    out = tmp_path / "mixed.mkv"
+    res = pipeline.render_project(p, f, Settings(device="cpu"), out)
+    assert (res["cuts"], res["blurs"], res["blackouts"], res["muted_scenes"]) == (1, 1, 1, 1)
+    assert probe(out).duration == pytest.approx(18.0, abs=0.3)
+    # after the 2 s cut: blackout 11-13 -> 9-11, muted scene 15.5-16.5 -> 13.5-14.5
+    assert level(out, 9.8) < -90 and level(out, 13.8) < -90 and level(out, 12.0) > -40
+    assert level(out, 4.5) > -40   # blurred scene keeps its sound
+
+
+def test_black_screen_keeps_sound(media_dir, fake_words, tmp_path):
+    f = FilterOptions(words=[], scene_action="cut")
+    p = _project(media_dir / "movie51.mkv", fake_words)
+    p.scenes = [{"id": "a", "kind": "kissing", "label": "K", "start": 2.0, "end": 4.0, "on": True,
+                 "action": "black_keep"}]
+    out = tmp_path / "bk.mkv"
+    pipeline.render_project(p, f, Settings(device="cpu"), out)
+    assert level(out, 3.0) > -40   # dialogue still audible
+    r = subprocess.run([ffmpeg(), "-hide_banner", "-ss", "3", "-i", str(out), "-frames:v", "1",
+                        "-vf", "signalstats,metadata=print:key=lavfi.signalstats.YAVG", "-f", "null", "-"],
+                       capture_output=True, text=True)
+    assert float([l for l in r.stderr.splitlines() if "YAVG" in l][0].split("=")[-1]) < 20

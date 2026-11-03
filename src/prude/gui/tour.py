@@ -46,6 +46,20 @@ def run_tour(app, out_dir: Path, video=None):
         add(open_words, 600)
         add(lambda: shot("2b-setup-words"))
 
+        def show_scenes():
+            w.setup.groups["nudity"].set_state({"nude_f_breasts", "nude_f_genitals", "nude_m_genitals",
+                                                 "nude_buttocks"}, 3, "blur")
+            w.setup.groups["sexual"].set_state({"sex_nude", "sex_implied", "kissing"}, 4, "cut")
+            w.setup.groups["violence"].set_state({"violence", "gore"}, 2, "black_keep")
+            body = w.setup.groups["nudity"].parentWidget()
+            area = body
+            while area is not None and not hasattr(area, "ensureWidgetVisible"):
+                area = area.parentWidget()
+            if area is not None:
+                area.ensureWidgetVisible(w.setup.groups["violence"])
+        add(show_scenes, 600)
+        add(lambda: shot("2c-setup-scenes"))
+
         def fake_scan():
             w.scanp.start(Path(video).name, ["audio", "speech", "words", "frames", "analyze"])
             w.stack.setCurrentWidget(w.scanp)
@@ -70,10 +84,15 @@ def run_tour(app, out_dir: Path, video=None):
                             "context": "oh crap", "on": False})
             p.scenes = [
                 {"id": "a", "kind": "violence", "label": "Violence", "start": 2.0, "end": 6.5,
-                 "score": 0.71, "thumb": thumbs[0], "thumb_blur": thumbs[0], "on": True},
+                 "score": 0.71, "thumb": thumbs[0], "thumb_blur": thumbs[0], "on": True, "action": "cut"},
+                {"id": "n", "kind": "sex_nude", "label": "Sex scene with nudity", "detail": "female breasts",
+                 "start": 8.0, "end": 10.5, "score": 0.81, "thumb": thumbs[0], "thumb_blur": thumbs[0],
+                 "on": True, "action": "blur"},
                 {"id": "b", "kind": "custom:smoking a cigarette", "label": "“smoking a cigarette”",
                  "start": 11.0, "end": 14.0, "score": 0.52, "thumb": thumbs[1], "thumb_blur": thumbs[1],
-                 "on": False}]
+                 "on": False, "action": "black_keep"},
+                {"id": "s", "kind": "swimwear", "label": "Swimsuits and bikinis", "start": 22.0, "end": 26.0,
+                 "score": 0.6, "thumb": thumbs[1], "thumb_blur": thumbs[1], "on": True, "action": "black_keep"}]
             w._filters = w.setup.filters()
             w.review.set_project(p, w.info, w.settings, w._filters)
             w.stack.setCurrentWidget(w.review)

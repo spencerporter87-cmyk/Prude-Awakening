@@ -22,10 +22,12 @@ def main(argv=None):
     p.add_argument("video")
     p.add_argument("--words", help="comma list: strong,blasphemy,sexual,slurs,mild")
     p.add_argument("--custom", default=None, help="extra words, comma separated")
-    p.add_argument("--scenes", default=None, help="comma list: nudity,sexual,violence,gore")
+    p.add_argument("--scenes", default=None,
+                   help="comma list, e.g. nude_f_breasts,nude_m_genitals,sex_nude,sex_implied,kissing,"
+                        "suggestive,swimwear,violence,gore,scary (or nudity / sexual for the usual set)")
     p.add_argument("--describe", action="append", default=None, help="scene description (repeatable)")
     p.add_argument("--sensitivity", type=int)
-    p.add_argument("--action", choices=["cut", "black"])
+    p.add_argument("--action", choices=["cut", "black", "black_keep", "blur", "mute"])
     p.add_argument("--padding", type=float)
     p.add_argument("--mute-mode", choices=["all", "center"])
     p.add_argument("--audio-track", type=int)
