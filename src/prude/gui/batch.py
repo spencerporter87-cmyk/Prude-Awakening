@@ -252,12 +252,17 @@ class BatchPage(QWidget):
         if color:
             st.setForeground(QBrush(QColor(color)))
         self.table.setItem(row, 2, st)
-        bar = self.table.cellWidget(row, 3)
-        if not isinstance(bar, QProgressBar):
+        holder = self.table.cellWidget(row, 3)
+        bar = holder.findChild(QProgressBar) if holder is not None else None
+        if bar is None:
+            holder = QWidget()
+            hl = QVBoxLayout(holder)
+            hl.setContentsMargins(8, 0, 8, 0)
             bar = QProgressBar()
             bar.setRange(0, 1000)
-            bar.setFixedHeight(12)
-            self.table.setCellWidget(row, 3, bar)
+            bar.setFixedHeight(10)
+            hl.addWidget(bar, 0, Qt.AlignVCenter)
+            self.table.setCellWidget(row, 3, holder)
         bar.setValue(int(job.progress * 1000))
         details = job.error if job.status == FAILED and job.error else job.message
         di = QTableWidgetItem(details)
