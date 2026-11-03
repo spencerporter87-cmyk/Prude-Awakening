@@ -350,7 +350,8 @@ class MainWindow(QMainWindow):
             ExportOptions(folder=self.settings.output_dir, quality=self.settings.video_quality,
                           naming="plex_edition")
         r = scene_ranges(self.project, f.scene_action)
-        reencode = any(r[a] for a in ("cut", "black", "black_keep", "blur", "blur_parts"))
+        reencode = any(r[a] for a in ("cut", "black", "black_keep", "blur", "blur_parts")) or \
+            (f.advanced or {}).get("mode") == "replace_lipsync"
         removed = sum(b - a for a, b in r["cut"])
         preset = self.settings.last_preset if self.settings.last_preset != "Custom" else ""
         dlg = ExportDialog(self.project.source, self.info, opts, reencode, removed,
@@ -367,6 +368,24 @@ class MainWindow(QMainWindow):
             q = QMessageBox.question(self, "Replace?", f"{out.name} already exists. Replace it?")
             if q != QMessageBox.Yes:
                 return
+        self.project.spend_ok = False
+        adv = f.advanced or {}
+        if adv.get("enabled") and adv.get("mode") != "mute" and adv.get("engine") == "elevenlabs":
+            from .. import replace
+            n = replace.elevenlabs_characters(self.project)
+            if not self.settings.elevenlabs_key:
+                QMessageBox.information(self, "ElevenLabs key needed",
+                                        "Add your ElevenLabs key in Settings → Advanced Editing. "
+                                        "This copy will use the built-in Windows voice instead.")
+            elif n:
+                q = QMessageBox.question(
+                    self, "Use your ElevenLabs credits?",
+                    f"About {n} characters (just the replacement words, not the movie) will be sent to "
+                    f"ElevenLabs and counted against your plan.\n\nContinue with ElevenLabs? "
+                    f"Choose No to use the free Windows voice.")
+                self.project.spend_ok = q == QMessageBox.Yes
+            else:
+                self.project.spend_ok = True          # everything is already made (nothing to pay for)
         resized = opts.resolution != "source" and self.info.height and self.info.height > int(opts.resolution) + 8
         self._filters_used = f
         self.review.leave()

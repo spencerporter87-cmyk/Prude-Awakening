@@ -57,6 +57,7 @@ class Project:
     english_share: float = 1.0
     lang_track: int = -1
     burned_edits: list = field(default_factory=list)     # words in subtitles burned into the picture
+    spend_ok: bool = False                               # ElevenLabs spending confirmed for this render
     burned_check: object = None                          # None = not checked; True/False
     schema: int = SCHEMA
 

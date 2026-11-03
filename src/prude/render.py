@@ -123,7 +123,8 @@ def _fade_gain(ranges, fade=FADE):
     return "*".join(terms) or "1"
 
 
-def build_audio_chain(info, track, mutes, blackouts, cuts, mute_mode, fade=False):
+def build_audio_chain(info, track, mutes, blackouts, cuts, mute_mode, fade=False, inserts=()):
+    """inserts: [(input number, start seconds)] mono clips laid over the silences (Advanced Editing)."""
     st = info.audio[track].raw
     src = f"[0:a:{track}]asetnsamples=n=256:p=0"
     graph, label = [], "a0"
@@ -151,6 +152,21 @@ def build_audio_chain(info, track, mutes, blackouts, cuts, mute_mode, fade=False
         chain += f",volume='{_fade_gain([(a - FADE, b + FADE) for a, b in whole_mutes])}':eval=frame"
     elif whole_mutes:
         chain += f",volume=0:enable='{_between(whole_mutes)}'"
+    if inserts and layout:
+        rate = int(st.get("sample_rate") or 48000)
+        if chans:
+            dlg = ["FC"] if "FC" in chans else [c for c in ("FL", "FR") if c in chans] or list(chans)
+        else:
+            dlg = ["FC"] if layout == "mono" else ["FL", "FR"]
+        pan = f"pan={layout}|" + "|".join(f"{c}=c0" for c in dlg)
+        graph.append(chain + "[apre]")
+        labels = ""
+        for n, (inp, start) in enumerate(inserts):
+            graph.append(f"[{inp}:a]aresample={rate},adelay={int(round(start * 1000))}:all=1,{pan}[ri{n}]")
+            labels += f"[ri{n}]"
+        graph.append(f"[apre]{labels}amix=inputs={len(inserts) + 1}:normalize=0:duration=first:"
+                     f"dropout_transition=0[amix]")
+        chain = "[amix]anull"
     if cuts:
         removed = "+".join(f"gte(T,{b:.3f})*{b - a:.3f}" for a, b in cuts)
         chain += (f",aselect='not({_between(cuts)})',asetpts='PTS-({removed})/TB',"
@@ -194,6 +210,28 @@ def build_video_chain(blackouts, cuts, blurs=(), src="[0:v:0]", scale_h=None):
 def render(info, project, filters, settings, patterns, out: Path, progress=None, cancel=None,
            log=print, export=None):
     """Returns a dict summary. filters: FilterOptions; settings: Settings; export: ExportOptions."""
+    adv = getattr(filters, "advanced", None) or {}
+    if adv.get("enabled") and adv.get("mode") != "mute":
+        import copy
+        try:
+            res = _render_with_fallback(info, project, filters, settings, patterns, out, progress, cancel, log, export)
+        except MediaError as e:
+            if cancel is not None and cancel.is_set():
+                raise
+            log(f"Advanced Editing (beta) failed ({str(e)[-200:]}); saving with plain silences instead.")
+            plain = copy.copy(filters)
+            plain.advanced = dict(adv, enabled=False)
+            res = _render_with_fallback(info, project, plain, settings, patterns, out, progress, cancel, log, export)
+            res.setdefault("warnings", []).append(
+                "Advanced Editing (beta) failed, so the words were silenced instead of replaced.")
+        if adv.get("mode") == "replace_lipsync" and res.get("replaced_words"):
+            from . import lipsync
+            res = lipsync.apply(info, project, filters, settings, res, progress, cancel, log)
+        return res
+    return _render_with_fallback(info, project, filters, settings, patterns, out, progress, cancel, log, export)
+
+
+def _render_with_fallback(info, project, filters, settings, patterns, out, progress, cancel, log, export):
     try:
         return _render(info, project, filters, settings, patterns, out, progress, cancel, log,
                        settings.device, export)
@@ -207,6 +245,18 @@ def render(info, project, filters, settings, patterns, out: Path, progress=None,
 AUDIO_NAMES = {"ac3": "Dolby Digital (AC3)", "eac3": "Dolby Digital Plus", "aac": "AAC", "flac": "FLAC",
                "alac": "ALAC", "dts": "DTS", "truehd": "Dolby TrueHD", "mp3": "MP3", "opus": "Opus",
                "libopus": "Opus", "libmp3lame": "MP3"}
+
+
+def _slots(clips, cuts):
+    """Where the replaced words are in the finished copy (after cuts)."""
+    from .subtitles import TimeMap
+    tm = TimeMap(cuts) if cuts else (lambda t: t)
+    out = []
+    for c in clips:
+        a, b = tm(c["start"]), tm(c["end"])
+        if a is not None and b is not None:
+            out.append([round(a, 3), round(b, 3)])
+    return out
 
 
 def _remove(path, tries=10):
@@ -248,7 +298,7 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out_ext = out.suffix.lower()
-    tmp_files = []
+    tmp_files, tmp_dirs = [], []
 
     mutes = merge_ranges((m["start"], m["end"]) for m in project.active_mutes())
     by_action = scene_ranges(project, filters.scene_action)
@@ -387,8 +437,23 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
         pgraph = pgraph + bgraph
         notes.append(f"Covered {len(burned)} word(s) in subtitles burned into the picture.")
 
+    # ---- Advanced Editing (beta): a spoken clean word laid over the silence. The silence is
+    # always there underneath, so a failure leaves a muted word and never the original.
+    adv = getattr(filters, "advanced", None) or {}
+    clips, spoken_chars = [], 0
+    if adv.get("enabled") and adv.get("mode") in ("replace", "replace_lipsync") and mutes:
+        from . import replace
+        work = out.parent / f".{out.stem}.prude-voice"
+        tmp_dirs.append(work)
+        if progress:
+            progress(0.0, "Making the replacement words (beta)")
+        clips, failed, spoken_chars = replace.prepare(project, info, filters, settings, work, log, cancel)
+        notes.append(f"Advanced Editing (beta): {len(clips)} word(s) replaced"
+                     + (f", {len(failed)} left silent because the voice failed" if failed else "") + ".")
+    base = 1 + len(subs) + (1 if fast_list else 0)
+    inserts = [(base + n, c["start"]) for n, c in enumerate(clips)]
     graph = build_audio_chain(info, track, mutes, merge_ranges(silent_blacks + mute_scenes), cuts,
-                              filters.mute_mode, fade=getattr(filters, "mute_fade", False))
+                              filters.mute_mode, fade=getattr(filters, "mute_fade", False), inserts=inserts)
     # ---- other audio tracks (other languages, commentary): kept as they are, NOT filtered
     others = []                 # (map target, raw stream, needs encoding)
     if export is not None and getattr(export, "other_audio", False):
@@ -416,6 +481,8 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
         cmd += ["-i", str(p)]
     if fast_list:
         cmd += ["-f", "concat", "-safe", "0", "-i", str(fast_list)]
+    for c in clips:
+        cmd += ["-i", c["wav"]]
     if len(graph_text) > 20000:
         script = out.with_name(f"{out.stem}.prude-filter.txt")
         script.write_text(graph_text, encoding="utf-8")
@@ -491,6 +558,8 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
             Path(f).unlink(missing_ok=True)
         if fast_work is not None:
             shutil.rmtree(fast_work, ignore_errors=True)
+        for d in tmp_dirs:
+            shutil.rmtree(d, ignore_errors=True)
 
     expected = max(1.0, info.duration - cut_total)
     ok, problems, got = validate(partial, expected, bool(info.video), bool(subs))
@@ -528,7 +597,9 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
     warnings += notes
     result = {"output": str(out), "how": how, "mutes": len(mutes), "cuts": len(cuts),
             "blackouts": len(blackouts), "blurs": len(blurs), "muted_scenes": len(mute_scenes),
-            "parts_blurred": len(parts), "burned_words": len(burned),
+            "parts_blurred": len(parts), "burned_words": len(burned), "replaced_words": len(clips),
+            "replacement_slots": _slots(clips, cuts),
+            "elevenlabs_characters": spoken_chars,
             "removed_seconds": round(cut_total, 1), "notes": notes,
             "original_duration": round(info.duration, 2),
             "final_duration": round(got.duration if got else expected, 2),

@@ -60,6 +60,19 @@ def run_tour(app, out_dir: Path, video=None):
         add(show_scenes, 600)
         add(lambda: shot("2c-setup-scenes"))
 
+        def show_advanced():
+            w.setup.adv_on.setChecked(True)
+            w.setup.adv_mode.setCurrentIndex(w.setup.adv_mode.findData("replace"))
+            body = w.setup.adv_on
+            area = body
+            while area is not None and not hasattr(area, "ensureWidgetVisible"):
+                area = area.parentWidget()
+            if area is not None:
+                area.ensureWidgetVisible(w.setup.adv_note)
+        add(show_advanced, 600)
+        add(lambda: shot("2d-setup-advanced"))
+        add(lambda: w.setup.adv_on.setChecked(False))
+
         def fake_scan():
             w.scanp.start(Path(video).name, ["audio", "speech", "words", "subs", "frames", "analyze"])
             w.stack.setCurrentWidget(w.scanp)

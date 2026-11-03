@@ -75,6 +75,8 @@ def _carry_over(new, old):
         n.setdefault("origin", "auto")
         if o is not None:
             n["on"] = o.get("on", True)
+            if "replace_text" in o:
+                n["replace_text"] = o["replace_text"]
             for k in ("action", "action_set", "replacement"):
                 if o.get("action_set" if k != "replacement" else k):
                     n[k] = o.get(k)

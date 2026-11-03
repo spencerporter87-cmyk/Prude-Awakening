@@ -7,9 +7,9 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                                QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
-                               QInputDialog, QLabel, QLineEdit, QPlainTextEdit, QProgressBar,
+                               QInputDialog, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
                                QRadioButton, QScrollArea, QSizePolicy, QSlider, QTableWidget,
                                QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 
@@ -26,7 +26,7 @@ from ..subtitles import TimeMap
 from .player import HAVE_MM, Player
 from .scenepicker import SceneGroup, action_combo
 from .wordpicker import WordCategory
-from .widgets import (Card, DropZone, StageRow, TimeEdit, button, fmt_time, icon_pixmap, label)
+from .widgets import (Card, DropZone, StageRow, TimeEdit, beta_badge, button, fmt_time, icon_pixmap, label)
 
 
 def page():
@@ -267,6 +267,40 @@ class SetupPage(QWidget):
         sc.lay.addWidget(self.scene_note)
         sc.lay.addStretch()
         grid.addWidget(sc, 1, 0)          # stacked: each card gets the full width
+
+        # ---- advanced editing (beta), off unless asked for
+        adv = Card()
+        ah = QHBoxLayout()
+        ah.addWidget(label("Advanced Editing", "H2"))
+        ah.addWidget(beta_badge())
+        ah.addStretch()
+        adv.lay.addLayout(ah)
+        self.adv_on = QCheckBox("Turn on Advanced Editing")
+        self.adv_on.toggled.connect(self._adv_toggled)
+        adv.lay.addWidget(self.adv_on)
+        adv.lay.addWidget(label("Beta: not fully tested yet. Instead of leaving a gap, a silenced word is "
+                                "replaced by a clean spoken one (\"hell\" → \"heck\"). The silence is always made "
+                                "first, so if anything fails the word just stays silent. Nothing here copies a "
+                                "real person's voice: a ready-made voice is chosen to match the speaker's pitch, "
+                                "loudness and timing.", "Muted", wrap=True))
+        self.adv_box = QWidget()
+        av = QFormLayout(self.adv_box)
+        av.setContentsMargins(0, 6, 0, 0)
+        from ..replace import ENGINES, MODES
+        self.adv_mode = QComboBox()
+        for k, t in MODES.items():
+            self.adv_mode.addItem(t, k)
+        self.adv_mode.currentIndexChanged.connect(self._changed)
+        av.addRow("What to do with silenced words", self.adv_mode)
+        self.adv_engine = QComboBox()
+        for k, t in ENGINES.items():
+            self.adv_engine.addItem(t, k)
+        self.adv_engine.currentIndexChanged.connect(self._changed)
+        av.addRow("Voice", self.adv_engine)
+        self.adv_note = label("", "Small", wrap=True)
+        av.addRow("", self.adv_note)
+        adv.lay.addWidget(self.adv_box)
+        grid.addWidget(adv, 2, 0)
         grid.setColumnStretch(0, 1)
         grid.setVerticalSpacing(16)
 
@@ -320,6 +354,11 @@ class SetupPage(QWidget):
         self.pad_val.setText(f"{f.padding:.2f} s")
         (self.mute_center if f.mute_mode == "center" else self.mute_all).setChecked(True)
         self.fade.setChecked(bool(f.mute_fade))
+        a = f.advanced or {}
+        self.adv_on.setChecked(bool(a.get("enabled")))
+        self.adv_box.setVisible(self.adv_on.isChecked())
+        self.adv_mode.setCurrentIndex(max(0, self.adv_mode.findData(a.get("mode", "mute"))))
+        self.adv_engine.setCurrentIndex(max(0, self.adv_engine.findData(a.get("engine", "windows"))))
         self.star.setCurrentIndex(max(0, self.star.findData(f.star_style or "stars")))
         self.burned.setCurrentIndex(max(0, self.burned.findData(f.burned_subs or "auto")))
         chosen = set(f.scenes)
@@ -341,12 +380,21 @@ class SetupPage(QWidget):
             burned_subs=self.burned.currentData() or "auto",
             mute_mode="center" if self.mute_center.isChecked() else "all",
             mute_fade=self.fade.isChecked(),
+            advanced=self._advanced(),
             scenes=[k for sg in self.groups.values() for k in sg.selected()],
             scene_descriptions=self.groups["custom"].text_value(),
             sensitivity=3,
             scene_action="cut",
             scene_sensitivity={g: sg.sensitivity() for g, sg in self.groups.items()},
             scene_actions={g: sg.action_value() for g, sg in self.groups.items()})
+
+    def _adv_toggled(self, on):
+        self.adv_box.setVisible(on)
+        self._changed()
+
+    def _advanced(self):
+        return {"enabled": self.adv_on.isChecked(), "mode": self.adv_mode.currentData() or "mute",
+                "engine": self.adv_engine.currentData() or "windows"}
 
     def _all_words(self, on):
         was = self._loading
@@ -372,6 +420,16 @@ class SetupPage(QWidget):
 
     def _update_notes(self):
         f = self.filters()
+        a = f.advanced or {}
+        notes = []
+        if a.get("mode") == "replace_lipsync":
+            notes.append("Lip-sync is experimental: it needs a MuseTalk install of your own and an NVIDIA card "
+                         "(Settings → Advanced Editing), and the video is re-encoded.")
+        if a.get("engine") == "elevenlabs":
+            notes.append("ElevenLabs sends only the replacement word (not the movie) over the internet and uses "
+                         "your credits. You'll be asked to confirm before anything is spent.")
+        if hasattr(self, "adv_note"):
+            self.adv_note.setText(" ".join(notes))
         any_scene = bool(f.scenes or f.scene_descriptions)
         if any_scene:
             self.scene_note.setText("Cutting, blacking out or blurring scenes means the video is re-encoded "
@@ -576,7 +634,7 @@ class ReviewPage(QWidget):
     render = Signal()
     changed = Signal()
 
-    COLS = ["On", "Time", "Words", "What was said", ""]
+    COLS = ["On", "Time", "Words", "What was said", "Says instead (beta)", ""]
 
     def __init__(self):
         super().__init__()
@@ -628,7 +686,7 @@ class ReviewPage(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setEditTriggers(QTableWidget.DoubleClicked | QTableWidget.EditKeyPressed)
         self.table.verticalHeader().setDefaultSectionSize(40)
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
@@ -636,6 +694,8 @@ class ReviewPage(QWidget):
         hh.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(3, QHeaderView.Stretch)
         hh.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.table.setColumnHidden(4, True)
         self.table.setWordWrap(False)
         self.table.setTextElideMode(Qt.ElideRight)
         self.table.itemChanged.connect(self._item_changed)
@@ -678,6 +738,9 @@ class ReviewPage(QWidget):
         self.title.setText(f"Review: {Path(project.source).name}")
         self.player.set_legend("plan", filters.scene_action)
         self.player.load(project.source)
+        a = getattr(filters, "advanced", None) or {}
+        self.advanced = bool(a.get("enabled")) and a.get("mode") != "mute"
+        self.table.setColumnHidden(4, not self.advanced)
         self._fill_words()
         self._fill_scenes()
         self._update()
@@ -723,8 +786,27 @@ class ReviewPage(QWidget):
             ci = QTableWidgetItem(m.get("context", ""))
             ci.setToolTip(f"{cat}\n{m.get('context', '')}")
             self.table.setItem(r, 3, ci)
-            b = button("▶ Play", "Link", lambda _=False, m=m: self._play(m), tip="See and hear it in the original")
-            self.table.setCellWidget(r, 4, b)
+            for c in (1, 2, 3):
+                it = self.table.item(r, c)
+                it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+            if kind == "mute" and not m.get("manual") and getattr(self, "advanced", False):
+                from ..replace import text_for
+                ri = QTableWidgetItem(text_for(m))
+                ri.setToolTip("What is said instead of the silence. Double-click to change it; "
+                              "empty = leave it silent.")
+            else:
+                ri = QTableWidgetItem("")
+                ri.setFlags(ri.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(r, 4, ri)
+            box = QWidget()
+            bl = QHBoxLayout(box)
+            bl.setContentsMargins(0, 0, 0, 0)
+            bl.addWidget(button("▶ Play", "Link", lambda _=False, m=m: self._play(m),
+                                tip="See and hear it in the original"))
+            if getattr(self, "advanced", False) and kind == "mute":
+                bl.addWidget(button("🔊 Hear", "Link", lambda _=False, m=m: self._hear(m),
+                                    tip="Hear the replacement word (preview uses the Windows voice)"))
+            self.table.setCellWidget(r, 5, box)
         self.table.blockSignals(False)
         self.tabs.setTabText(0, f"Words ({len(self.rows)})")
 
@@ -750,7 +832,32 @@ class ReviewPage(QWidget):
         for row in getattr(self, "scene_rows", []):
             row.set_blur(self.blurred and row.s.get("kind") in INTIMATE)
 
+    def _hear(self, m):
+        from ..replace import preview, text_for
+        text = text_for(m)
+        if not text:
+            return
+        try:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            wav = preview(text, "male", "windows", None)
+        except Exception as e:                              # noqa: BLE001
+            QApplication.restoreOverrideCursor()
+            QMessageBox.information(self, "Can't make the voice", str(e))
+            return
+        QApplication.restoreOverrideCursor()
+        try:
+            subprocess.Popen([find_tool("ffplay"), "-hide_banner", "-loglevel", "quiet", "-autoexit", "-nodisp",
+                              str(wav)], stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
+        except OSError:
+            pass
+
     def _item_changed(self, item):
+        if item.column() == 4 and 0 <= item.row() < len(self.rows):
+            kind, m = self.rows[item.row()]
+            if kind == "mute":
+                m["replace_text"] = item.text().strip()
+                self.changed.emit()
+            return
         if item.column() == 0:
             self.rows[item.row()][1]["on"] = item.checkState() == Qt.Checked
             self._update()

@@ -855,3 +855,129 @@ def test_soft_fades_and_other_audio_tracks(tmp_path, fake_words):
     assert abs(got.duration - 18.0) < 0.3
     assert level(res["output"], 5.25) < -60            # "hell" is silent in the middle
     assert level(res["output"], 2.0) > -40
+
+
+# ---------------------------------------------------------------- Advanced Editing (beta)
+def _fake_voice(text, gender, out):
+    """Stand-in for a TTS voice: a 500 Hz tone about 0.1 s per letter."""
+    ff("-f", "lavfi", "-i", f"sine=f=500:d={max(0.3, 0.09 * len(text)):.2f}", "-ar", "22050", "-ac", "1",
+       str(out))
+
+
+from conftest import ff  # noqa: E402
+
+
+def test_replacement_suggestions():
+    from prude import replace
+    assert replace.suggest("hell?") == "heck"
+    assert replace.suggest('shit (heard as "ship")') == "crap"
+    assert replace.suggest("God damn").lower() == "gosh darn"
+    assert replace.suggest("zzzzword") == ""
+    assert replace.text_for({"words": "hell", "replace_text": "heck no"}) == "heck no"
+    assert replace.text_for({"words": "hell", "replace_text": ""}) == ""        # user chose silence
+
+
+def test_pitch_and_level():
+    import numpy as np
+    from prude import replace
+    t = np.arange(16000) / 16000
+    x = (0.3 * np.sin(2 * np.pi * 120 * t)).astype(np.float32)
+    f0, db = replace.pitch_and_level(x, 16000)
+    assert 110 <= f0 <= 130 and -14 < db < -8
+
+
+def test_replacement_words_are_spoken_over_the_silence(media_dir, fake_words, tmp_path, monkeypatch):
+    from prude import replace
+    monkeypatch.setattr(replace, "synthesize", lambda text, gender, engine, settings=None, spend_ok=False,
+                        log=print, hook=None: (_make_clip(tmp_path, text), "windows"))
+    f = FilterOptions(words=["mild", "blasphemy", "strong"],
+                      advanced={"enabled": True, "mode": "replace", "engine": "windows"})
+    p = _project(media_dir / "movie51.mkv", fake_words)
+    pipeline.find_word_mutes(p, f)
+    res = pipeline.render_project(p, f, Settings(device="cpu"), tmp_path / "adv.mkv")
+    assert res["valid"] and res["replaced_words"] >= 2, res["warnings"]
+    out = tmp_path / "adv.mkv"
+    # the original word (a 400 Hz tone in FC?) is gone; our 500 Hz replacement is in the centre speaker
+
+    def band(t, f, pan):
+        r = subprocess.run([ffmpeg(), "-hide_banner", "-ss", str(t), "-t", "0.2", "-i", str(out), "-map", "0:a:0",
+                            "-af", f"pan=mono|c0={pan},bandpass=f={f}:width_type=q:w=8,astats",
+                            "-f", "null", "-"], capture_output=True, text=True)
+        v = [l for l in r.stderr.splitlines() if "RMS level dB" in l][-1].split(":")[-1].strip()
+        return -200.0 if v == "-inf" else float(v)
+    assert band(5.3, 500, "FC") > -45                  # a spoken replacement where "hell" was
+    assert band(5.3, 500, "FL") < -80                  # only in the centre channel (dialogue)
+    assert level(out, 2.0, pan="FL") > -40             # the rest untouched
+
+
+def _make_clip(tmp_path, text):
+    p = tmp_path / f"voice-{abs(hash(text))}.wav"
+    if not p.exists():
+        _fake_voice(text, "male", p)
+    return p
+
+
+def test_failed_voice_leaves_the_word_silent(media_dir, fake_words, tmp_path, monkeypatch):
+    from prude import replace
+
+    def boom(*a, **k):
+        raise RuntimeError("no voice installed")
+    monkeypatch.setattr(replace, "synthesize", boom)
+    f = FilterOptions(words=["mild"], advanced={"enabled": True, "mode": "replace", "engine": "windows"})
+    p = _project(media_dir / "movie51.mkv", fake_words)
+    pipeline.find_word_mutes(p, f)
+    res = pipeline.render_project(p, f, Settings(device="cpu"), tmp_path / "fail.mkv")
+    assert res["valid"] and res["replaced_words"] == 0
+    assert level(tmp_path / "fail.mkv", 5.3, pan="FC") < -90         # still silent, never the original
+
+
+def test_elevenlabs_needs_confirmation_and_a_key(tmp_path, monkeypatch):
+    from prude import replace
+
+    class S:
+        elevenlabs_key = "k"
+    calls = []
+    monkeypatch.setattr(replace, "synth_elevenlabs", lambda *a, **k: calls.append(a))
+    hook = lambda text, gender, out: _fake_voice(text, gender, out)          # noqa: E731
+    _, used = replace.synthesize("heck", "male", "elevenlabs", S(), spend_ok=False, hook=hook)
+    assert used == "windows" and not calls                 # no confirmation -> no spending
+    _, used = replace.synthesize("heck", "male", "elevenlabs", type("T", (), {"elevenlabs_key": ""})(),
+                                 spend_ok=True, hook=hook)
+    assert used == "windows"                               # no key -> no ElevenLabs
+
+
+def test_lipsync_blends_back_with_a_fake_musetalk(media_dir, fake_words, tmp_path, monkeypatch):
+    import shutil as sh
+    from prude import lipsync, replace
+    monkeypatch.setattr(replace, "synthesize", lambda text, gender, engine, settings=None, spend_ok=False,
+                        log=print, hook=None: (_make_clip(tmp_path, text), "windows"))
+    fake = tmp_path / "MuseTalk"
+    (fake / "scripts").mkdir(parents=True)
+    (fake / "scripts" / "inference.py").write_text("")
+    s = Settings(device="cpu", musetalk_dir=str(fake))
+
+    def runner(py, folder, clip, wav, work, log=print):            # "MuseTalk": returns the clip unchanged
+        out = work / "made.mp4"
+        sh.copy(clip, out)
+        return out
+    f = FilterOptions(words=["mild"], advanced={"enabled": True, "mode": "replace_lipsync", "engine": "windows"})
+    p = _project(media_dir / "movie51.mkv", fake_words)
+    pipeline.find_word_mutes(p, f)
+    # use the real render, then the lip-sync step with a fake face finder and runner
+    monkeypatch.setattr(lipsync, "run_musetalk", runner)
+    monkeypatch.setattr(lipsync, "face_present", lambda v, t: True)
+    res = pipeline.render_project(p, f, s, tmp_path / "lips.mkv")
+    assert "lip-sync" in res["how"], res["warnings"]
+    assert res["valid"] is not False and abs(probe(tmp_path / "lips.mkv").duration - 20) < 0.5
+    assert any("Lip-sync (experimental)" in w for w in res["warnings"])
+
+
+def test_lipsync_not_set_up_is_explained(media_dir, fake_words, tmp_path, monkeypatch):
+    from prude import replace
+    monkeypatch.setattr(replace, "synthesize", lambda text, gender, engine, settings=None, spend_ok=False,
+                        log=print, hook=None: (_make_clip(tmp_path, text), "windows"))
+    f = FilterOptions(words=["mild"], advanced={"enabled": True, "mode": "replace_lipsync", "engine": "windows"})
+    p = _project(media_dir / "movie51.mkv", fake_words)
+    pipeline.find_word_mutes(p, f)
+    res = pipeline.render_project(p, f, Settings(device="cpu"), tmp_path / "nolips.mkv")
+    assert any("isn't set up" in w for w in res["warnings"]) and res["replaced_words"] >= 1

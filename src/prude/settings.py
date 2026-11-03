@@ -13,6 +13,7 @@ class FilterOptions:
     custom_words: str = ""
     allow_words: str = ""
     padding: float = 0.15
+    advanced: dict = field(default_factory=lambda: {"enabled": False, "mode": "mute", "engine": "windows"})
     mute_fade: bool = False           # soften the edges of each silence (30 ms)
     burned_subs: str = "auto"         # subtitles in the picture: auto (foreign films) | on | off
     star_style: str = "stars"         # subtitles: stars "****" | first "f***" | word "freaking"
@@ -65,6 +66,9 @@ class Settings:
     make_subtitles: bool = True
     blur_thumbnails: bool = True
     gpu_pack_declined: bool = False
+    elevenlabs_key: str = ""                   # Advanced Editing (beta); stays on this PC
+    musetalk_dir: str = ""                     # Advanced Editing (beta): a MuseTalk install you made
+    musetalk_python: str = ""
     last_preset: str = "Family night"
     filters: dict = field(default_factory=lambda: asdict(BUILTIN_PRESETS["Family night"]))
     presets: dict = field(default_factory=dict)  # user presets name -> FilterOptions dict

@@ -24,6 +24,16 @@ def icon_pixmap(size) -> QPixmap:
     return pm.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation) if not pm.isNull() else pm
 
 
+def beta_badge(text="BETA"):
+    """Small orange pill: this feature isn't fully tested or released yet."""
+    b = QLabel(text)
+    b.setStyleSheet("background:#E8872B; color:#FFFFFF; font-weight:700; font-size:10px; "
+                    "border-radius:8px; padding:2px 8px;")
+    b.setAlignment(Qt.AlignCenter)
+    b.setFixedHeight(18)
+    return b
+
+
 def label(text, name=None, wrap=False):
     lab = QLabel(text)
     if name:
