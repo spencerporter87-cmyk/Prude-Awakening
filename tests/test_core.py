@@ -329,3 +329,43 @@ def test_black_screen_keeps_sound(media_dir, fake_words, tmp_path):
                         "-vf", "signalstats,metadata=print:key=lavfi.signalstats.YAVG", "-f", "null", "-"],
                        capture_output=True, text=True)
     assert float([l for l in r.stderr.splitlines() if "YAVG" in l][0].split("=")[-1]) < 20
+
+
+def test_blur_only_body_parts(media_dir, fake_words, tmp_path, monkeypatch):
+    import cv2
+    from prude import blurparts
+
+    class FakeDetector:   # "finds" a body part in the top-left area between 4 and 8 seconds
+        def __init__(self, classes):
+            pass
+
+        def boxes(self, image_path):
+            return [(40.0, 30.0, 120.0, 90.0)]   # in the 640-wide sample's pixels
+
+    monkeypatch.setattr(blurparts, "Detector", FakeDetector)
+    f = FilterOptions(words=[], scenes=["nude_f_breasts"])
+    p = _project(media_dir / "movie51.mkv", fake_words)
+    p.scenes = [{"id": "a", "kind": "nudity", "label": "Nudity", "start": 4.0, "end": 8.0, "on": True,
+                 "action": "blur_parts"}]
+    out = tmp_path / "parts.mkv"
+    res = pipeline.render_project(p, f, Settings(device="cpu"), out)
+    assert res["parts_blurred"] == 1 and probe(out).duration == pytest.approx(20.0, abs=0.3)
+
+    def frame(path, t):
+        cap = cv2.VideoCapture(str(path))
+        cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
+        ok, img = cap.read()
+        assert ok
+        return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(float)
+
+    def sharp(img):
+        return cv2.Laplacian(img, cv2.CV_64F).var()
+
+    o, c = frame(media_dir / "movie51.mkv", 6.0), frame(out, 6.0)
+    inside = (slice(22, 128), slice(28, 172))        # inside the padded box (640x360 source)
+    outside = (slice(250, 340), slice(400, 600))
+    assert sharp(c[inside]) < 0.25 * sharp(o[inside])         # edges inside the box blurred away
+    assert abs(c[outside] - o[outside]).mean() < 6            # rest of the picture untouched
+    o2, c2 = frame(media_dir / "movie51.mkv", 14.0), frame(out, 14.0)
+    assert abs(c2[inside] - o2[inside]).mean() < 6            # no blur outside the scene
+    assert level(out, 6.0) > -40                              # sound kept

@@ -35,7 +35,7 @@ def run_tour(app, out_dir: Path, video=None):
     if video:
         add(lambda: w.open_file(video))
         add(lambda: (w.setup.apply(BUILTIN_PRESETS["Kids"]),
-                     w.setup.describe.setPlainText("smoking a cigarette\na person vomiting")))
+                     w.setup.groups["custom"].text.setPlainText("smoking a cigarette\na person vomiting")))
         add(lambda: shot("2-setup"))
 
         def open_words():
@@ -87,7 +87,7 @@ def run_tour(app, out_dir: Path, video=None):
                  "score": 0.71, "thumb": thumbs[0], "thumb_blur": thumbs[0], "on": True, "action": "cut"},
                 {"id": "n", "kind": "sex_nude", "label": "Sex scene with nudity", "detail": "female breasts",
                  "start": 8.0, "end": 10.5, "score": 0.81, "thumb": thumbs[0], "thumb_blur": thumbs[0],
-                 "on": True, "action": "blur"},
+                 "on": True, "action": "blur_parts"},
                 {"id": "b", "kind": "custom:smoking a cigarette", "label": "“smoking a cigarette”",
                  "start": 11.0, "end": 14.0, "score": 0.52, "thumb": thumbs[1], "thumb_blur": thumbs[1],
                  "on": False, "action": "black_keep"},

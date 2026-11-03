@@ -3,13 +3,15 @@ what to do with what it finds."""
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout,
-                               QPlainTextEdit, QSlider, QVBoxLayout, QWidget)
+                               QPlainTextEdit, QSizePolicy, QSlider, QVBoxLayout, QWidget)
 
 from .widgets import label
 from .wordpicker import CategoryBox
 
 ACTION_CHOICES = [("cut", "Cut it out"), ("black", "Black screen + silence"),
-                  ("black_keep", "Black screen (keep sound)"), ("blur", "Blur the picture (keep sound)"),
+                  ("black_keep", "Black screen (keep sound)"),
+                  ("blur_parts", "Blur just the private parts (keep sound)"),
+                  ("blur", "Blur the whole picture (keep sound)"),
                   ("mute", "Silence the sound only")]
 PICKY = {1: "Only obvious", 2: "Fewer flags", 3: "Balanced", 4: "More flags", 5: "Flag anything suspicious"}
 
@@ -47,11 +49,10 @@ class SceneGroup(QFrame):
             t = label(name)
             t.setStyleSheet("font-weight: 600;")
             head.addWidget(t)
-        if desc:
-            head.addWidget(label(desc, "Small"), 1)
-        else:
-            head.addStretch()
+        head.addStretch()
         lay.addLayout(head)
+        if desc:
+            lay.addWidget(label(desc, "Small", wrap=True))
 
         if types:
             grid = QGridLayout()
@@ -81,17 +82,20 @@ class SceneGroup(QFrame):
         self.slider = QSlider(Qt.Horizontal)
         self.slider.setRange(1, 5)
         self.slider.setPageStep(1)
-        self.slider.setMaximumWidth(150)
-        row.addWidget(self.slider)
+        self.slider.setMinimumWidth(90)
+        row.addWidget(self.slider, 1)
         self.picky = label("", "Small")
-        self.picky.setMinimumWidth(130)
+        self.picky.setMinimumWidth(118)
         row.addWidget(self.picky)
-        row.addStretch()
-        row.addWidget(label("Then", "Small"))
-        self.action = action_combo()
-        self.action.currentIndexChanged.connect(self._toggled)
-        row.addWidget(self.action)
         lay.addLayout(row)
+        row2 = QHBoxLayout()
+        row2.addWidget(label("What to do with them", "Small"))
+        self.action = action_combo()
+        self.action.setMinimumWidth(120)
+        self.action.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.action.currentIndexChanged.connect(self._toggled)
+        row2.addWidget(self.action, 1)
+        lay.addLayout(row2)
         self.slider.valueChanged.connect(lambda v: (self.picky.setText(PICKY[v]), self._toggled()))
         self.slider.setValue(3)
         self._sync()

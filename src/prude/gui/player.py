@@ -144,10 +144,10 @@ class Player(QWidget):
         return True
 
     # ------------------------------------------------------------ live filters
-    def set_filters(self, mutes, cuts, blackouts, blurs=(), black_keep=()):
-        """blackouts are silent; black_keep and blurs keep their sound."""
+    def set_filters(self, mutes, cuts, blackouts, blurs=(), black_keep=(), parts=()):
+        """blackouts are silent; black_keep, blurs and parts keep their sound."""
         self.mutes, self.cuts, self.blackouts = list(mutes), list(cuts), list(blackouts)
-        self.blurs, self.black_keep = list(blurs), list(black_keep)
+        self.blurs, self.black_keep, self.parts = list(blurs), list(black_keep), list(parts)
 
     def set_live(self, on):
         self.live = bool(on)
@@ -176,6 +176,10 @@ class Player(QWidget):
         self.black.setText("◌  Blurred in the clean copy (sound plays)" if blur else
                            "⬛  Black screen (sound plays)" if black_snd else "⬛  Blacked out")
         self.screen.setCurrentIndex(1 if (black or black_snd or blur) else 0)
+        if any(a <= t < b for a, b in getattr(self, "parts", [])):
+            self.status.setText("◌ Private parts will be blurred here in the clean copy")
+        elif self.status.text().startswith("◌"):
+            self.status.setText("")
         muted = black or any(a <= t < b for a, b in self.mutes)
         if self.audio.isMuted() != muted:
             self.audio.setMuted(muted)

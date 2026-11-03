@@ -12,9 +12,10 @@ CUT = QColor("#C8412B")
 BLACK = QColor("#2A1B2E")
 BLUR = QColor("#7B61B0")
 MUTE = QColor("#B5762A")
-ACTION_COLOR = {"cut": CUT, "black": BLACK, "black_keep": BLACK, "blur": BLUR, "mute": MUTE}
+ACTION_COLOR = {"cut": CUT, "black": BLACK, "black_keep": BLACK, "blur": BLUR, "blur_parts": BLUR, "mute": MUTE}
 ACTION_WORD = {"cut": "✂ Cut out", "black": "⬛ Black screen + silence", "black_keep": "⬛ Black screen, sound kept",
-               "blur": "◌ Blurred, sound kept", "mute": "🔇 Sound silenced"}
+               "blur": "◌ Whole picture blurred, sound kept",
+               "blur_parts": "◌ Private parts blurred, sound kept", "mute": "🔇 Sound silenced"}
 OFF = QColor("#C9BBAA")
 TRACK = QColor("#F1E9DD")
 

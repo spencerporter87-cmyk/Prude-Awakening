@@ -149,6 +149,7 @@ class SetupPage(QWidget):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         body = QWidget()
         grid = QGridLayout(body)
         grid.setContentsMargins(0, 0, 0, 0)
@@ -437,7 +438,7 @@ class SceneRow(QFrame):
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(14)
         self.pic = QLabel()
-        self.pic.setFixedSize(144, 81)
+        self.pic.setFixedSize(128, 72)
         self.pic.setStyleSheet("background: #222; border-radius: 8px;")
         self.pic.setAlignment(Qt.AlignCenter)
         lay.addWidget(self.pic)
@@ -445,37 +446,39 @@ class SceneRow(QFrame):
         col = QVBoxLayout()
         head = QHBoxLayout()
         t = label(scene.get("label", "Scene"), "H2")
-        head.addWidget(t)
-        if scene.get("detail"):
-            head.addWidget(label(f"({scene['detail']})", "Muted"))
+        t.setWordWrap(True)
+        head.addWidget(t, 1)
         if scene.get("score") is not None and not scene.get("manual"):
             conf = int(float(scene["score"]) * 100)
-            head.addWidget(label(f"{conf}% sure", "Muted"))
-        head.addStretch()
+            head.addWidget(label(f"{conf}% sure", "Muted"), 0, Qt.AlignTop)
         col.addLayout(head)
+        if scene.get("detail"):
+            col.addWidget(label(scene["detail"].capitalize(), "Small", wrap=True))
         times = QHBoxLayout()
         self.a, self.b = TimeEdit(scene["start"]), TimeEdit(scene["end"])
         self.a.changed.connect(self._times)
         self.b.changed.connect(self._times)
         times.addWidget(self.a)
-        times.addWidget(label("to"))
+        times.addWidget(label("–"))
         times.addWidget(self.b)
         self.len = label("", "Muted")
         times.addWidget(self.len)
         times.addStretch()
         col.addLayout(times)
         btns = QHBoxLayout()
-        btns.addWidget(button("▶  Play", None, lambda: on_play(self.s) if on_play else
+        btns.addWidget(button("▶ Play", None, lambda: on_play(self.s) if on_play else
                               play_clip(source, self.s["start"], self.s["end"], scene.get("label", "Scene"))))
-        self.chk = QCheckBox("Change this scene:")
+        self.chk = QCheckBox("Change it")
+        self.chk.setToolTip("Untick to leave this scene as it is")
         self.chk.setChecked(scene.get("on", True))
         self.chk.toggled.connect(self._toggle)
         btns.addWidget(self.chk)
         self.act = action_combo(scene.get("action") or "cut")
+        self.act.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.act.setMinimumWidth(110)
         self.act.setEnabled(scene.get("on", True))
         self.act.currentIndexChanged.connect(self._action)
-        btns.addWidget(self.act)
-        btns.addStretch()
+        btns.addWidget(self.act, 1)
         col.addLayout(btns)
         lay.addLayout(col, 1)
         self._times()
@@ -487,7 +490,7 @@ class SceneRow(QFrame):
             self.pic.setText("No picture")
             self.pic.setStyleSheet("background: #EFE6D9; color: #6B566E; border-radius: 8px;")
         else:
-            self.pic.setPixmap(pm.scaled(144, 81, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
+            self.pic.setPixmap(pm.scaled(128, 72, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
 
     def _times(self, *_):
         a, b = self.a.seconds(), self.b.seconds()
@@ -592,6 +595,7 @@ class ReviewPage(QWidget):
         sl.addLayout(sbar)
         self.scene_scroll = QScrollArea()
         self.scene_scroll.setWidgetResizable(True)
+        self.scene_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scene_host = QWidget()
         self.scene_list = QVBoxLayout(self.scene_host)
         self.scene_list.setSpacing(10)
@@ -735,7 +739,7 @@ class ReviewPage(QWidget):
         p = self.project
         r = scene_ranges(p, self.filters.scene_action)
         mutes = merge_ranges([(m["start"], m["end"]) for m in p.mutes if m.get("on", True)] + r["mute"])
-        self.player.set_filters(mutes, r["cut"], r["black"], r["blur"], r["black_keep"])
+        self.player.set_filters(mutes, r["cut"], r["black"], r["blur"], r["black_keep"], r["blur_parts"])
         dur = self.info.duration if self.info else max([1.0] + [x["end"] for x in p.mutes + p.scenes])
         self.player.timeline.set_plan(dur, p.mutes, p.scenes, self.filters.scene_action)
 
@@ -750,7 +754,7 @@ class ReviewPage(QWidget):
                 a = s.get("action") or self.filters.scene_action
                 by[a] = by.get(a, 0) + 1
             names = {"cut": "cut", "black": "blacked out", "black_keep": "blacked out (sound kept)",
-                     "blur": "blurred", "mute": "silenced"}
+                     "blur": "blurred", "blur_parts": "private parts blurred", "mute": "silenced"}
             what = ", ".join(f"{n} {names[a]}" for a, n in by.items()) or "none changed"
             parts.append(f"{len(scenes)} of {len(self.project.scenes)} scenes ({what})")
         if any((s.get("action") or self.filters.scene_action) != "mute" for s in scenes):
@@ -773,7 +777,7 @@ def clean_timeline(project, filters, duration):
         if a is not None and b is not None:
             mutes.append({"start": a, "end": b, "words": m.get("words", "")})
     others = []
-    for action in ("black", "black_keep", "blur", "mute"):
+    for action in ("black", "black_keep", "blur", "blur_parts", "mute"):
         for a, b in r[action]:
             ma, mb = tm(a), tm(b)
             if ma is not None and mb is not None:
@@ -924,6 +928,8 @@ class RenderPage(QWidget):
             bits.append(n(result["cuts"], "scene") + f" cut ({fmt_time(result['removed_seconds'], False)} removed)")
         if result["blackouts"]:
             bits.append(n(result["blackouts"], "scene") + " blacked out")
+        if result.get("parts_blurred"):
+            bits.append(n(result["parts_blurred"], "scene") + " with private parts blurred")
         if result.get("blurs"):
             bits.append(n(result["blurs"], "scene") + " blurred")
         if result.get("muted_scenes"):

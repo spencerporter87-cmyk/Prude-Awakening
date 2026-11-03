@@ -42,7 +42,7 @@ def _fmt_left(sec):
     return f"{h} h {m:02d} min" if h else f"{m} min"
 
 
-def run_ffmpeg(cmd, duration, progress=None, cancel=None, label="Working", fps=None):
+def run_ffmpeg(cmd, duration, progress=None, cancel=None, label="Working", fps=None, cwd=None):
     """Run an ffmpeg command (without -progress) and report 0..1 progress with a message like
     "Making the clean copy · 3.2× speed · about 12 min left".
     Raises MediaError with ffmpeg's message on failure, Cancelled on cancel."""
@@ -52,7 +52,8 @@ def run_ffmpeg(cmd, duration, progress=None, cancel=None, label="Working", fps=N
     full = [cmd[0], "-nostdin", "-hide_banner", "-loglevel", "error", "-nostats",
             "-progress", "pipe:1", "-stats_period", "0.5"] + list(cmd[1:])
     proc = subprocess.Popen(full, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
+                            text=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW,
+                            cwd=str(cwd) if cwd else None)
     tail = collections.deque(maxlen=200)
 
     def drain():  # keep stderr flowing so ffmpeg never blocks on a full pipe

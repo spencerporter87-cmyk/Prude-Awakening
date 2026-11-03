@@ -4,6 +4,7 @@
 * Cutting scenes or blacking them out: the video is re-encoded at very high quality
   (NVIDIA graphics card when available), audio and subtitles are kept in sync."""
 
+import shutil
 from pathlib import Path
 
 from .media import (LANG3, LANG_NAMES, TEXT_SUB_CODECS, MediaError, channel_layouts, encoder_works,
@@ -114,7 +115,7 @@ def build_audio_chain(info, track, mutes, blackouts, cuts, mute_mode):
     return graph
 
 
-ACTIONS = ("cut", "black", "black_keep", "blur", "mute")
+ACTIONS = ("cut", "black", "black_keep", "blur", "blur_parts", "mute")
 
 
 def scene_ranges(project, default_action):
@@ -126,10 +127,10 @@ def scene_ranges(project, default_action):
     return {a: merge_ranges(r) for a, r in out.items()}
 
 
-def build_video_chain(blackouts, cuts, blurs=()):
+def build_video_chain(blackouts, cuts, blurs=(), src="[0:v:0]"):
     if not blackouts and not cuts and not blurs:
-        return []
-    chain = "[0:v:0]"
+        return [f"{src}null[vout]"] if src != "[0:v:0]" else []
+    chain = src
     parts = []
     if blurs:
         parts.append("boxblur=luma_radius='min(w,h)/14':luma_power=3:"
@@ -167,7 +168,7 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
 
     mutes = merge_ranges((m["start"], m["end"]) for m in project.active_mutes())
     by_action = scene_ranges(project, filters.scene_action)
-    cuts, blurs = by_action["cut"], by_action["blur"]
+    cuts, blurs, parts = by_action["cut"], by_action["blur"], by_action["blur_parts"]
     silent_blacks, sound_blacks = by_action["black"], by_action["black_keep"]
     blackouts = merge_ranges(silent_blacks + sound_blacks)
     mute_scenes = by_action["mute"]
@@ -210,9 +211,31 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
                 notes.append(f"Made subtitles from the dialogue: {side.name}")
 
     # ---- filter graph
+    # ---- blur only the exposed body parts (detected now, several times a second)
+    vsrc, pgraph = "[0:v:0]", []
+    if parts and info.video:
+        from . import blurparts
+        classes = blurparts.classes_for([t for t in filters.scenes if t.startswith("nude_")])
+        samples = blurparts.detect(info, parts, classes, out.parent / f".{out.stem}.prude-blur",
+                                   (lambda f, m: progress(0.03 * f, m)) if progress else None, cancel)
+        found = [(a, b) for a, b in parts if any(a - 0.5 <= t <= b + 0.5 and bx for t, bx in samples)]
+        missing = [r for r in parts if r not in found]
+        if missing:
+            log(f"No body parts found in {len(missing)} scene(s) marked for body-part blur; "
+                "blurring the whole picture there instead.")
+            blurs = merge_ranges(blurs + missing)
+        if found:
+            import uuid
+            cmd_name = f"prude-blur-{uuid.uuid4().hex[:8]}.cmd"   # plain name: safe inside a filtergraph
+            blurparts.write_commands(out.parent / cmd_name, samples, found, info.width, info.height)
+            tmp_files.append(out.parent / cmd_name)
+            pgraph, vsrc = blurparts.filter_parts(info, found, cmd_name, _between(
+                [(a - 0.3, b + 0.3) for a, b in found]))
+        shutil.rmtree(out.parent / f".{out.stem}.prude-blur", ignore_errors=True)
+
     graph = build_audio_chain(info, track, mutes, merge_ranges(silent_blacks + mute_scenes), cuts,
                               filters.mute_mode)
-    vgraph = build_video_chain(blackouts, cuts, blurs)
+    vgraph = pgraph + build_video_chain(blackouts, cuts, blurs, vsrc)
     graph += vgraph
     graph_text = ";".join(graph)
 
@@ -266,8 +289,9 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
         f"{len(blurs)} blurred, {len(mute_scenes)} scenes muted.")
     try:
         log("ffmpeg " + " ".join(f'"{c}"' if " " in str(c) else str(c) for c in cmd[1:])[:4000])
-        run_ffmpeg(cmd, max(1.0, info.duration - cut_total), progress, cancel,
-                   "Re-encoding" if vgraph else "Copying", fps=info.fps)
+        run_ffmpeg(cmd, max(1.0, info.duration - cut_total),
+                   (lambda f, m: progress(0.03 + 0.97 * f, m)) if (progress and parts) else progress,
+                   cancel, "Re-encoding" if vgraph else "Copying", fps=info.fps, cwd=out.parent)
     except BaseException:
         out.unlink(missing_ok=True)
         raise
@@ -276,4 +300,5 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
             Path(f).unlink(missing_ok=True)
     return {"output": str(out), "how": how, "mutes": len(mutes), "cuts": len(cuts),
             "blackouts": len(blackouts), "blurs": len(blurs), "muted_scenes": len(mute_scenes),
+            "parts_blurred": len(parts),
             "removed_seconds": round(cut_total, 1), "notes": notes}
