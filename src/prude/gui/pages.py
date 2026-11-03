@@ -150,6 +150,16 @@ class SetupPage(QWidget):
         self.track.setMinimumWidth(320)
         self.track.currentIndexChanged.connect(lambda i: (not self._loading) and self.trackChanged.emit(i))
         info.addWidget(self.track)
+        info.addSpacing(16)
+        info.addWidget(label("Dialogue:", "Muted"))
+        self.dialogue = QComboBox()
+        for text, key in (("Detect automatically", "auto"), ("English", "en"),
+                          ("Another language (clean the subtitles only)", "foreign")):
+            self.dialogue.addItem(text, key)
+        self.dialogue.setToolTip("Movies like Apocalypto have no English speech, only English subtitles.\n"
+                                 "Then nothing is silenced; swear words in the subtitles are starred out\n"
+                                 "and the subtitles are set to show automatically.")
+        info.addWidget(self.dialogue)
         info.addStretch()
         outer.addLayout(info)
 
@@ -172,8 +182,18 @@ class SetupPage(QWidget):
         lh.addWidget(label("·", "Muted"))
         lh.addWidget(button("Select none", "Link", lambda: self._all_words(False)))
         lang.lay.addLayout(lh)
-        lang.lay.addWidget(label("Words to silence (in subtitles they become ****). "
-                                 "Click ▸ Words to pick individual words.", "Muted", wrap=True))
+        lang.lay.addWidget(label("Words to silence. Click ▸ Words to pick individual words.",
+                                 "Muted", wrap=True))
+        srow = QHBoxLayout()
+        srow.addWidget(label("In subtitles, show them as", None))
+        self.star = QComboBox()
+        for text, key in (("****", "stars"), ("f***  (first letter)", "first"),
+                          ("a cleaner word (freaking, crap…)", "word")):
+            self.star.addItem(text, key)
+        self.star.currentIndexChanged.connect(self._changed)
+        srow.addWidget(self.star)
+        srow.addStretch()
+        lang.lay.addLayout(srow)
         self.cats = {}
         for key, name, desc in CATEGORIES:
             wc = WordCategory(key, name, desc, masked=(key == "slurs"))
@@ -258,6 +278,7 @@ class SetupPage(QWidget):
         for t in info.audio:
             self.track.addItem(t.describe())
         self.track.setCurrentIndex(min(project.audio_track, max(0, len(info.audio) - 1)))
+        self.dialogue.setCurrentIndex(max(0, self.dialogue.findData(project.dialogue or "auto")))
         self._presets = settings.all_presets()
         self.preset.clear()
         self.preset.addItems(list(self._presets) + ["Custom"])
@@ -279,6 +300,7 @@ class SetupPage(QWidget):
         self.pad.setValue(int(round(f.padding * 100)))
         self.pad_val.setText(f"{f.padding:.2f} s")
         (self.mute_center if f.mute_mode == "center" else self.mute_all).setChecked(True)
+        self.star.setCurrentIndex(max(0, self.star.findData(f.star_style or "stars")))
         chosen = set(f.scenes)
         for g, sg in self.groups.items():
             sg.set_state(chosen, (f.scene_sensitivity or {}).get(g, f.sensitivity),
@@ -294,6 +316,7 @@ class SetupPage(QWidget):
             custom_words=self.custom.toPlainText().strip(),
             allow_words=self.allow.text().strip(),
             padding=self.pad.value() / 100,
+            star_style=self.star.currentData() or "stars",
             mute_mode="center" if self.mute_center.isChecked() else "all",
             scenes=[k for sg in self.groups.values() for k in sg.selected()],
             scene_descriptions=self.groups["custom"].text_value(),
@@ -309,6 +332,9 @@ class SetupPage(QWidget):
             wc.set_all(on)
         self._loading = was
         self._changed()
+
+    def dialogue_value(self):
+        return self.dialogue.currentData() or "auto"
 
     def preset_name(self):
         return self.preset.currentText()
@@ -527,7 +553,7 @@ class ReviewPage(QWidget):
     render = Signal()
     changed = Signal()
 
-    COLS = ["Mute", "Time", "Words", "What was said", ""]
+    COLS = ["On", "Time", "Words", "What was said", ""]
 
     def __init__(self):
         super().__init__()
@@ -637,10 +663,19 @@ class ReviewPage(QWidget):
         else:
             self.tabs.setCurrentIndex(0)
 
+    def _sub_rows(self):
+        """Subtitle-only rows: shown when the dialogue isn't English (nothing to silence, only stars)."""
+        from ..pipeline import dialogue_is_english
+        if dialogue_is_english(self.project):
+            return []
+        return list(getattr(self.project, "subtitle_edits", []) or [])
+
     def _fill_words(self):
         self.table.blockSignals(True)
         self.table.setRowCount(0)
-        for r, m in enumerate(self.project.mutes):
+        self.rows = [("mute", m) for m in self.project.mutes] + [("sub", x) for x in self._sub_rows()]
+        self.rows.sort(key=lambda r: r[1]["start"])
+        for r, (kind, m) in enumerate(self.rows):
             self.table.insertRow(r)
             chk = QTableWidgetItem()
             chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
@@ -648,16 +683,21 @@ class ReviewPage(QWidget):
             self.table.setItem(r, 0, chk)
             self.table.setItem(r, 1, QTableWidgetItem(fmt_time(m["start"])))
             cat = "Added by you" if m.get("manual") else CATEGORY_NAMES.get(m.get("category"), "")
-            wi = QTableWidgetItem(m.get("words", ""))
+            if kind == "sub":
+                cat += "\nIn the subtitles only: starred out when ticked (the dialogue isn't English)."
+                chk.setToolTip("Star this word out in the subtitles")
+            elif m.get("unsure"):
+                cat += "\nFound in the subtitles but not heard clearly: play it to check."
+            wi = QTableWidgetItem(("💬 " if kind == "sub" else "") + m.get("words", ""))
             wi.setToolTip(cat)
             self.table.setItem(r, 2, wi)
             ci = QTableWidgetItem(m.get("context", ""))
             ci.setToolTip(f"{cat}\n{m.get('context', '')}")
             self.table.setItem(r, 3, ci)
-            b = button("▶ Play", "Link", lambda _=False, m=m: self._play(m), tip="Hear it in the original")
+            b = button("▶ Play", "Link", lambda _=False, m=m: self._play(m), tip="See and hear it in the original")
             self.table.setCellWidget(r, 4, b)
         self.table.blockSignals(False)
-        self.tabs.setTabText(0, f"Words ({len(self.project.mutes)})")
+        self.tabs.setTabText(0, f"Words ({len(self.rows)})")
 
     def _fill_scenes(self):
         while self.scene_list.count():
@@ -683,12 +723,12 @@ class ReviewPage(QWidget):
 
     def _item_changed(self, item):
         if item.column() == 0:
-            self.project.mutes[item.row()]["on"] = item.checkState() == Qt.Checked
+            self.rows[item.row()][1]["on"] = item.checkState() == Qt.Checked
             self._update()
             self.changed.emit()
 
     def _set_all(self, on):
-        for m in self.project.mutes:
+        for _k, m in self.rows:
             m["on"] = on
         self._fill_words()
         self._update()
@@ -734,6 +774,9 @@ class ReviewPage(QWidget):
     def _timeline_item(self, kind, i):
         if kind == "mute":
             self.tabs.setCurrentIndex(0)
+            if 0 <= i < len(self.project.mutes):
+                target = self.project.mutes[i]
+                i = next((r for r, (_k, m) in enumerate(self.rows) if m is target), i)
             self.table.selectRow(i)
             self.table.scrollToItem(self.table.item(i, 0))
         else:
@@ -757,7 +800,12 @@ class ReviewPage(QWidget):
         self._refresh_timeline()
         mutes = [m for m in self.project.mutes if m.get("on", True)]
         scenes = [s for s in self.project.scenes if s.get("on", True)]
-        parts = [f"{len(mutes)} of {len(self.project.mutes)} words will be silenced"]
+        subs = self._sub_rows()
+        if subs and not self.project.mutes:
+            parts = [f"{sum(1 for x in subs if x.get('on', True))} of {len(subs)} words starred out "
+                     "in the subtitles (the dialogue isn't English)"]
+        else:
+            parts = [f"{len(mutes)} of {len(self.project.mutes)} words will be silenced"]
         if self.project.scenes:
             by = {}
             for s in scenes:
@@ -772,7 +820,7 @@ class ReviewPage(QWidget):
         else:
             parts.append("picture copied untouched")
         self.summary.setText(" · ".join(parts) + ".")
-        self.go.setEnabled(bool(mutes or scenes))
+        self.go.setEnabled(bool(mutes or scenes or subs))
 
 
 def clean_timeline(project, filters, duration):

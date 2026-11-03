@@ -13,6 +13,7 @@ class FilterOptions:
     custom_words: str = ""
     allow_words: str = ""
     padding: float = 0.15
+    star_style: str = "stars"         # subtitles: stars "****" | first "f***" | word "freaking"
     mute_mode: str = "all"            # all | center
     scenes: list = field(default_factory=list)   # scene type keys, see scenes.SCENE_TYPES
     scene_descriptions: str = ""      # one per line

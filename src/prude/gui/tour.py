@@ -61,7 +61,7 @@ def run_tour(app, out_dir: Path, video=None):
         add(lambda: shot("2c-setup-scenes"))
 
         def fake_scan():
-            w.scanp.start(Path(video).name, ["audio", "speech", "words", "frames", "analyze"])
+            w.scanp.start(Path(video).name, ["audio", "speech", "words", "subs", "frames", "analyze"])
             w.stack.setCurrentWidget(w.scanp)
             w.scanp.on_progress("audio", 1.0, "Done")
             w.scanp.on_progress("speech", 0.42, "Listening… about 4 min left")

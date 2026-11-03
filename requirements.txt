@@ -7,3 +7,10 @@ opencv-python-headless>=4.9
 numpy>=1.26
 requests>=2.31
 tokenizers>=0.15
+# Picture-subtitle text recognition: install with --no-deps (see .github/workflows/build.yml)
+# rapidocr_onnxruntime
+pyclipper
+shapely
+pyyaml
+six
+pillow

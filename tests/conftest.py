@@ -40,7 +40,18 @@ def media_dir(tmp_path_factory):
     ff("-f", "lavfi", "-i", "testsrc2=s=640x360:r=25:d=20", "-f", "lavfi", "-i", "sine=f=1000:d=20",
        "-ac", "2", "-c:v", "mpeg4", "-q:v", "5", "-c:a", "libmp3lame", "-b:a", "192k",
        str(d / "old.avi"))
+    # Blu-ray style picture subtitles (PGS), English
+    from pgs import write_sup
+    write_sup(d / "pic.sup", PIC_CUES)
+    ff("-f", "lavfi", "-i", "testsrc2=s=1280x720:r=24:d=20", "-f", "lavfi", "-i", "sine=f=500:d=20",
+       "-i", str(d / "pic.sup"), "-map", "0:v", "-map", "1:a", "-map", "2", "-c:v", "libx264",
+       "-preset", "ultrafast", "-c:a", "aac", "-c:s", "copy", "-copyts",
+       "-metadata:s:s:0", "language=eng", "-metadata:s:a:0", "language=spa", str(d / "pgs.mkv"))
     return d
+
+
+PIC_CUES = [(2.0, 4.0, "Run, they are coming!"), (6.0, 8.5, "What the fuck is that?"),
+            (12.0, 14.0, "Get the shit\nout of here!")]
 
 
 WORDS = [("Well", 1.0, 1.3), (" what", 4.8, 5.0), (" the", 5.0, 5.1), (" hell?", 5.1, 5.5),

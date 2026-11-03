@@ -207,36 +207,68 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
                          "Untick some scenes and try again.")
 
     # ---- subtitles
-    subs, notes = [], []   # subs: (path, lang, title, forced)
+    from .subscan import IMAGE_SUB_CODECS, is_english_track, kept_keys
+    subs, notes = [], []   # subs: (path, lang, title, forced, default)
+    english_dialogue = project.dialogue == "en" or (project.dialogue != "foreign" and
+                                                     float(getattr(project, "english_share", 1.0)) >= 0.25)
+    style = getattr(filters, "star_style", "stars")
+    kept = kept_keys(getattr(project, "subtitle_edits", []))
+    try:
+        import json as _json
+        pic_cache = _json.loads((project.dir / "subtitles.json").read_text(encoding="utf-8"))
+    except Exception:
+        pic_cache = {}
     if settings.keep_subtitles or settings.make_subtitles:
         if settings.keep_subtitles:
-            starred = 0
+            starred, primary = 0, False
             for s in info.subtitles:
                 tags = s.get("tags", {})
+                codec = s.get("codec_name") or ""
                 label = tags.get("title") or LANG_NAMES.get(tags.get("language", ""), "Subtitles")
-                if s.get("codec_name") in TEXT_SUB_CODECS:
-                    tmp = out.with_name(f"{out.stem}.sub{s['index']}.prude-temp.srt")
+                forced = bool(s.get("disposition", {}).get("forced"))
+                cues, from_pictures = None, False
+                tmp = out.with_name(f"{out.stem}.sub{s['index']}.prude-temp.srt")
+                if codec in TEXT_SUB_CODECS:
                     tmp_files.append(tmp)
                     if extract_text_sub(info.path, s["index"], tmp):
                         cues = read_srt(tmp)
-                        starred += clean_cues(cues, patterns)
-                        cues = shift_cues(cues, cuts)
-                        if cues:
-                            write_srt(tmp, cues)
-                            subs.append((tmp, tags.get("language"), f"{label} (clean)",
-                                         bool(s.get("disposition", {}).get("forced"))))
-                        continue
-                notes.append(f"Left out picture-based subtitles ({label}) — they can't be edited.")
+                elif codec in IMAGE_SUB_CODECS:
+                    cached = pic_cache.get(f"{s['index']}:{codec}")
+                    if cached:
+                        cues, from_pictures = [list(c) for c in cached], True
+                        tmp_files.append(tmp)
+                if not cues:
+                    if codec in IMAGE_SUB_CODECS:
+                        notes.append(f"Left out picture-based subtitles ({label}): "
+                                     + ("only English ones are read." if not is_english_track(s)
+                                        else "they couldn't be read."))
+                    continue
+                if is_english_track(s):
+                    starred += clean_cues(cues, patterns, style, kept)
+                cues = shift_cues(cues, cuts)
+                if not cues:
+                    continue
+                write_srt(tmp, cues)
+                show = (not english_dialogue) and is_english_track(s) and not primary
+                primary = primary or show
+                title = f"{label} (clean)" + (" - read from picture subtitles" if from_pictures else "")
+                subs.append((tmp, tags.get("language"), title, forced or show, show))
             if subs:
-                notes.insert(0, f"Cleaned {len(subs)} subtitle track(s); {starred} words starred out.")
+                notes.insert(0, f"Cleaned {len(subs)} subtitle track(s); {starred} words changed in the subtitles.")
+            if any(x[4] for x in subs):
+                notes.append("The dialogue isn't English, so the English subtitles are set to show automatically.")
+            if any("picture subtitles" in x[2] for x in subs):
+                notes.append("Picture-based subtitles were converted to text with text recognition "
+                             "(small reading mistakes are possible).")
         words = project.transcript.get("words") or []
         if settings.make_subtitles and words:
             side = out.with_name(f"{out.stem}.{project.language}.srt")
-            cues = shift_cues(generate_cues(words, project.active_mutes(), patterns), cuts)
+            cues = shift_cues(generate_cues(words, project.active_mutes(), patterns, style), cuts)
             if cues:
                 write_srt(side, cues)
                 subs.append((side, LANG3.get(project.language, project.language),
-                             f"{'English' if project.language == 'en' else project.language} (Prude Awakening)", False))
+                             f"{'English' if project.language == 'en' else project.language} (Prude Awakening)",
+                             False, False))
                 notes.append(f"Made subtitles from the dialogue: {side.name}")
 
     # ---- filter graph
@@ -300,10 +332,11 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
     cmd += aargs
     if subs:
         cmd += ["-c:s", "mov_text" if out_ext in MP4_LIKE else "srt"]
-        for j, (_p, lang, title, forced) in enumerate(subs):
+        for j, (_p, lang, title, forced, default) in enumerate(subs):
             if lang:
                 cmd += [f"-metadata:s:s:{j}", f"language={lang}"]
-            cmd += [f"-metadata:s:s:{j}", f"title={title}", f"-disposition:s:{j}", "forced" if forced else "0"]
+            disp = "+".join(x for x, on in (("default", default), ("forced", forced)) if on) or "0"
+            cmd += [f"-metadata:s:s:{j}", f"title={title}", f"-disposition:s:{j}", disp]
     tags = st.get("tags", {})
     if tags.get("language"):
         cmd += ["-metadata:s:a:0", f"language={tags['language']}"]

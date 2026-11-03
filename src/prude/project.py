@@ -16,7 +16,7 @@ SCHEMA = 2
 def migrate(d: dict) -> dict:
     """Bring an older saved project up to the current layout without losing anything."""
     import uuid
-    for kind in ("mutes", "scenes"):
+    for kind in ("mutes", "scenes", "subtitle_edits"):
         for item in d.get(kind) or []:
             item.setdefault("id", uuid.uuid4().hex[:12])
             item.setdefault("on", True)
@@ -51,6 +51,11 @@ class Project:
     scan_filters: dict = field(default_factory=dict)
     last_output: str = ""
     exports: list = field(default_factory=list)          # summaries of finished exports
+    subtitle_edits: list = field(default_factory=list)   # filtered words found in the subtitles
+    dialogue: str = "auto"                                # auto | en | foreign
+    spoken_language: str = ""                             # detected, e.g. "en", "yua"
+    english_share: float = 1.0
+    lang_track: int = -1
     schema: int = SCHEMA
 
     @property
@@ -76,7 +81,8 @@ class Project:
         return cls(source=source)
 
     def has_transcript(self, track) -> bool:
-        return bool(self.transcript.get("words")) and self.transcript.get("track") == track
+        t = self.transcript
+        return t.get("track") == track and (bool(t.get("words")) or bool(t.get("skipped")))
 
     def clear_cache(self):
         shutil.rmtree(self.dir, ignore_errors=True)

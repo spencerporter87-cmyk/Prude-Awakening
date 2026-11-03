@@ -251,11 +251,17 @@ class MainWindow(QMainWindow):
         if self.busy() or not self.project:
             return
         f = self.setup.filters()
+        dialogue = self.setup.dialogue_value()
+        if dialogue != self.project.dialogue:
+            self.project.dialogue = dialogue
+            if dialogue == "auto":
+                self.project.spoken_language = ""
         self.settings.filters = asdict(f)
         self.settings.last_preset = self.setup.preset_name()
         self.settings.save()
         mdir = self.settings.models_path
-        have_words = self.project.has_transcript(self.project.audio_track)
+        have_words = self.project.has_transcript(self.project.audio_track) and not (
+            self.project.transcript.get("skipped") and dialogue == "en")
         want_scenes = bool(f.scenes or f.scene_descriptions)
         want_clip = any(k in CLIP_FOR for k in f.scenes) or bool(f.scene_descriptions.strip())
         need = 0.0
@@ -272,7 +278,7 @@ class MainWindow(QMainWindow):
         stages = []
         if get_gpu:
             stages.append("gpu")
-        stages += ["audio", "speech", "words"]
+        stages += ["audio", "speech", "words", "subs"]
         if want_scenes:
             if want_clip and not models.clip_ready(self.settings.models_path):
                 stages.append("models")
@@ -426,6 +432,17 @@ def self_test(out_path):
         report["nudenet_model"] = "ok"
     except Exception as e:
         report["nudenet_model"] = f"FAILED: {e}"
+        ok = False
+    try:
+        import numpy as np
+        from .. import ocr
+        img = np.full((90, 600, 3), 255, np.uint8)
+        import cv2
+        cv2.putText(img, "Hello there", (20, 60), cv2.FONT_HERSHEY_DUPLEX, 1.6, (0, 0, 0), 3)
+        report["ocr"] = ocr.read_text(img) or "FAILED: read nothing"
+        ok = ok and "hello" in report["ocr"].lower()
+    except Exception as e:
+        report["ocr"] = f"FAILED: {e}"
         ok = False
     report["ok"] = ok
     Path(out_path).write_text(json.dumps(report, indent=1))

@@ -4,15 +4,17 @@ import uuid
 from pathlib import Path
 
 from . import models, scenes as scene_mod
-from .media import probe
+from .media import Cancelled, probe
 from .render import output_path, render
-from .transcribe import extract_dialogue_wav, transcribe
+from .subscan import read_tracks, subtitle_findings
+from .transcribe import detect_language, extract_dialogue_wav, transcribe
 from .words import build_patterns, find_matches, merge_intervals, normalize
 
 STAGES = [
     ("gpu", "Getting the graphics-card speed-up pack"),
     ("audio", "Pulling out the dialogue"),
     ("speech", "Listening for words"),
+    ("subs", "Reading the subtitles"),
     ("words", "Matching your word list"),
     ("models", "Getting the scene model"),
     ("frames", "Watching the movie"),
@@ -34,6 +36,9 @@ def _text(item):
 
 def _match_score(n, o):
     """How likely a new finding is the same edit as an old one (0 = different)."""
+    if n.get("kind") == "subtitle" or o.get("kind") == "subtitle":
+        same = n.get("norm") == o.get("norm") and abs(float(n["start"]) - float(o["start"])) <= 1.0
+        return 2.0 if same else 0.0
     if "kind" in n or "kind" in o:                       # scenes
         same = n.get("kind") == o.get("kind") or (n.get("group") and n.get("group") == o.get("group"))
         ov = _overlap(n, o)
@@ -85,15 +90,24 @@ def patterns_for(filters):
                           getattr(filters, "excluded_words", ()))
 
 
-def find_word_mutes(project, filters):
-    words = project.transcript.get("words") or []
+def find_word_mutes(project, filters, extra=()):
+    """extra: mutes found through the subtitles (words speech recognition missed)."""
+    words = (project.transcript.get("words") or []) if dialogue_is_english(project) else []
     hits = find_matches(words, patterns_for(filters), filters.padding, filters.padding,
                         filters.allow_words)
     merged = merge_intervals(hits)
     for m in merged:
         m["start"], m["end"] = round(m["start"], 2), round(m["end"], 2)
-    project.mutes = _carry_over(merged, project.mutes)
+    project.mutes = _carry_over(merged + [dict(e) for e in extra], project.mutes)
     return project.mutes
+
+
+def dialogue_is_english(project):
+    if project.dialogue == "en":
+        return True
+    if project.dialogue == "foreign":
+        return False
+    return project.english_share >= 0.25
 
 
 def scan(project, filters, settings, progress=None, cancel=None, log=print, get_gpu_pack=False):
@@ -107,7 +121,9 @@ def scan(project, filters, settings, progress=None, cancel=None, log=print, get_
     mdir = settings.models_path
     mdir.mkdir(parents=True, exist_ok=True)
 
-    if not project.has_transcript(project.audio_track):
+    need_listen = not project.has_transcript(project.audio_track) or (
+        project.transcript.get("skipped") and dialogue_is_english(project))
+    if need_listen:
         if get_gpu_pack and not models.gpu_pack_ready(mdir):
             try:
                 models.ensure_gpu_pack(mdir, p("gpu"), cancel)
@@ -116,9 +132,27 @@ def scan(project, filters, settings, progress=None, cancel=None, log=print, get_
         wav = project.dir / "dialogue.wav"
         try:
             extract_dialogue_wav(info, project.audio_track, wav, p("audio"), cancel)
-            words, model, device = transcribe(
-                wav, info.duration, mdir, project.language, settings.speech_model,
-                settings.device, p("speech"), cancel, log)
+            if project.dialogue == "auto" and (not project.spoken_language
+                                               or project.lang_track != project.audio_track):
+                try:
+                    lang, share, samples = detect_language(wav, info.duration, mdir, settings.device,
+                                                           progress=p("speech"), cancel=cancel, log=log)
+                    project.spoken_language, project.english_share = lang, round(share, 2)
+                    project.lang_track = project.audio_track
+                    log(f"Spoken language: {lang} ({int(share * 100)}% of samples English: {samples})")
+                except Cancelled:
+                    raise
+                except Exception as e:                       # noqa: BLE001 - assume English
+                    log(f"Couldn't tell the spoken language ({e}); treating it as English.")
+                    project.english_share = 1.0
+            if dialogue_is_english(project):
+                words, model, device = transcribe(
+                    wav, info.duration, mdir, project.language, settings.speech_model,
+                    settings.device, p("speech"), cancel, log)
+            else:
+                words, model, device = [], "", ""
+                log("The dialogue isn't English, so listening for English words was skipped; "
+                    "the English subtitles will be cleaned instead.")
         finally:
             wav.unlink(missing_ok=True)
         offset = float(info.audio[project.audio_track].raw.get("start_time") or 0) - info.format_start
@@ -126,11 +160,23 @@ def scan(project, filters, settings, progress=None, cancel=None, log=print, get_
             for w in words:
                 w["s"], w["e"] = round(w["s"] + offset, 3), round(w["e"] + offset, 3)
         project.transcript = {"track": project.audio_track, "model": model, "device": device,
-                              "words": words}
+                              "words": words, "skipped": "" if words or dialogue_is_english(project)
+                              else "not English"}
         project.save()
     if progress:
         progress("words", 1.0, "Matching your word list")
     find_word_mutes(project, filters)
+
+    # ---- subtitles: star out words; in English movies also catch words that weren't heard
+    english = dialogue_is_english(project)
+    tracks = read_tracks(info, project.dir, p("subs"), cancel, log)
+    items, extra = subtitle_findings(tracks, patterns_for(filters), project.transcript.get("words"),
+                                     project.mutes, english, filters.padding)
+    project.subtitle_edits = _carry_over(items, project.subtitle_edits)
+    if extra:
+        find_word_mutes(project, filters, extra)
+        log(f"Subtitles caught {sum(1 for e in extra if not e.get('unsure'))} missed word(s); "
+            f"{sum(1 for e in extra if e.get('unsure'))} more to check in Review.")
 
     descriptions = [d.strip() for d in (filters.scene_descriptions or "").splitlines() if d.strip()]
     if filters.scenes or descriptions:

@@ -13,9 +13,10 @@ datas = [(os.path.join(SRC, "prude", "data"), os.path.join("prude", "data")),
          (os.path.join(ROOT, "vendor", "ffmpeg"), "ffmpeg")]
 datas += collect_data_files("faster_whisper")
 datas += collect_data_files("nudenet")
+datas += collect_data_files("rapidocr_onnxruntime")
 binaries = collect_dynamic_libs("ctranslate2") + collect_dynamic_libs("onnxruntime")
 hidden = collect_submodules("faster_whisper") + collect_submodules("prude") + [
-    "tokenizers", "nudenet", "cv2", "ctranslate2", "onnxruntime", "requests", "numpy"]
+    "tokenizers", "nudenet", "cv2", "rapidocr_onnxruntime", "pyclipper", "shapely", "yaml", "ctranslate2", "onnxruntime", "requests", "numpy"]
 
 a = Analysis(
     [os.path.join(ROOT, "run_app.py")],

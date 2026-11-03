@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 from .media import ffmpeg, run
-from .words import STARS, censor_text, matched_word_ids
+from .words import STARS, censor_text, matched_word_ids, star_word
 
 
 def srt_time(t):
@@ -93,15 +93,18 @@ def extract_text_sub(src, stream_index, dest):
     return r.returncode == 0 and Path(dest).exists()
 
 
-def clean_cues(cues, patterns):
+def clean_cues(cues, patterns, style="stars", kept=None):
+    """kept: set of (round(cue_start, 1), normalized word) the user chose to leave alone."""
     total = 0
     for c in cues:
-        c[2], n = censor_text(c[2], patterns)
+        key = round(float(c[0]), 1)
+        skip = (lambda norm, key=key: (key, norm) in kept) if kept else None
+        c[2], n = censor_text(c[2], patterns, style, skip)
         total += n
     return total
 
 
-def generate_cues(words, mutes, patterns):
+def generate_cues(words, mutes, patterns, style="stars"):
     """Subtitles written from what was heard. Muted words become ****: listed words
     inside a mute, or every word inside a mute added by hand."""
     listed = matched_word_ids(words, patterns)
@@ -116,7 +119,8 @@ def generate_cues(words, mutes, patterns):
         if i in starred:
             lead = w[:len(w) - len(w.lstrip())]
             trail = re.search(r"[.,!?;:\"')\]]*$", w.strip()).group()
-            return lead + STARS + trail
+            core = w.strip()[:len(w.strip()) - len(trail)] if trail else w.strip()
+            return lead + star_word(core, style) + trail
         return w
 
     groups, cur = [], []

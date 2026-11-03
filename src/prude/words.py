@@ -156,10 +156,63 @@ def matched_word_ids(words, patterns):
 _WORD_RE = re.compile(r"[A-Za-z0-9'’*]+(?:-[A-Za-z0-9'’]+)*")
 
 
-def censor_text(text, patterns):
+# Cleaner words for subtitles ("a cleaner word" style). Keys are normalized words/phrases.
+SUBSTITUTES = {
+    "fuck": "freak", "fucking": "freaking", "fucked": "freaked", "fucker": "jerk", "fuckin": "freakin",
+    "motherfucker": "mother-lover", "motherfucking": "mother-loving",
+    "shit": "crap", "shitty": "crappy", "bullshit": "bull", "horseshit": "nonsense", "dipshit": "dipstick",
+    "damn": "darn", "damned": "darned", "dammit": "darn it", "goddamn": "gosh darn", "goddamned": "gosh darned",
+    "god damn": "gosh darn", "god damn it": "gosh darn it", "goddammit": "gosh darn it",
+    "hell": "heck", "ass": "butt", "asshole": "jerk", "assholes": "jerks", "jackass": "jerk", "dumbass": "dummy",
+    "bitch": "witch", "bitches": "witches", "bastard": "jerk", "bastards": "jerks", "son of a bitch": "son of a gun",
+    "piss": "tick", "pissed": "ticked", "dick": "jerk", "dickhead": "jerk", "prick": "jerk", "crap": "crud",
+    "jesus": "geez", "jesus christ": "geez", "christ": "geez", "oh my god": "oh my gosh", "my god": "my gosh",
+    "oh god": "oh gosh", "for god's sake": "for goodness' sake", "for christ's sake": "for goodness' sake",
+}
+
+
+def star_word(original, style="stars"):
+    """The replacement shown in subtitles for one matched word or phrase."""
+    if style == "first":
+        keep = {"oh", "my", "for", "the", "a", "of", "son", "it", "sake", "to", "swear", "good", "dear", "holy", "h"}
+        out = []
+        for w in original.split(" "):
+            letters = [c for c in w if c.isalpha()]
+            if not letters or normalize(w).replace("'s", "") in keep:
+                out.append(w)
+            else:
+                out.append(letters[0] + "*" * max(3, len(letters) - 1))
+        return " ".join(out)
+    if style == "word":
+        sub = SUBSTITUTES.get(" ".join(normalize(w) for w in original.split()))
+        if sub:
+            if original[:1].isupper():
+                sub = sub[:1].upper() + sub[1:]
+            if original.isupper() and len(original) > 1:
+                sub = sub.upper()
+            return sub
+    return STARS
+
+
+def censor_text(text, patterns, style="stars", skip=None):
+    """Replace filtered words/phrases. skip(norm_text) -> True keeps that match as it is."""
     toks = [(m.start(), m.end(), normalize(m.group())) for m in _WORD_RE.finditer(text)]
     toks = [t for t in toks if t[2]]
-    spans = [(toks[a][0], toks[b - 1][1]) for a, b, _p in _scan([t[2] for t in toks], patterns)]
+    spans = []
+    for a, b, _p in _scan([t[2] for t in toks], patterns):
+        if skip and skip(" ".join(t[2] for t in toks[a:b])):
+            continue
+        spans.append((toks[a][0], toks[b - 1][1]))
     for a, b in reversed(spans):
-        text = text[:a] + STARS + text[b:]
+        text = text[:a] + star_word(text[a:b], style) + text[b:]
     return text, len(spans)
+
+
+def find_in_text(text, patterns):
+    """[(matched_text, normalized, category)] for one subtitle line."""
+    toks = [(m.start(), m.end(), normalize(m.group())) for m in _WORD_RE.finditer(text)]
+    toks = [t for t in toks if t[2]]
+    out = []
+    for a, b, p in _scan([t[2] for t in toks], patterns):
+        out.append((text[toks[a][0]:toks[b - 1][1]], " ".join(t[2] for t in toks[a:b]), p.category))
+    return out

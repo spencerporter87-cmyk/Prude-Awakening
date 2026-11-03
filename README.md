@@ -11,7 +11,12 @@ Mutes bad language and removes scenes you'd rather not see — automatically, on
 3. **Review** every mute and scene, with ▶ preview, before anything is changed.
 4. **Save** a clean copy. With only mutes, the video is copied bit-for-bit (no quality loss);
    cut or blacked-out scenes are re-encoded at very high quality (NVIDIA NVENC when available).
-   Subtitles are cleaned (★★★★) and new subtitles are written from the dialogue.
+   Subtitles are cleaned (`****`, `f***` or a cleaner word) and new subtitles are written
+   from the dialogue. Picture-based subtitles (Blu-ray/DVD) are read with offline text
+   recognition and cleaned too. In English movies the subtitles double-check the listening
+   and catch words it missed.
+5. **Foreign-language films** (e.g. Apocalypto): the dialogue is left alone, the English
+   subtitles are cleaned and set to show automatically.
 
 Your movies, transcripts and choices never leave your computer.
 

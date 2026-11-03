@@ -570,3 +570,96 @@ def test_expand_folders(tmp_path):
         (tmp_path / "S" / "Season 01" / n).write_bytes(b"x")
     names = [p.name for p in expand_sources([tmp_path / "S"])]
     assert names == ["Show - S01E1.mkv", "Show - S01E2.mkv", "Show - S01E10.mkv"]
+
+
+# ---------------------------------------------------------------- subtitles (2.8)
+def test_star_styles():
+    from prude.words import star_word
+    pats = build_patterns(["strong", "blasphemy", "mild"])
+    assert censor_text("Shut the fuck up", pats, "stars")[0] == "Shut the **** up"
+    assert censor_text("Shut the fuck up", pats, "first")[0] == "Shut the f*** up"
+    assert censor_text("Shut the fuck up", pats, "word")[0] != "Shut the fuck up"
+    assert "fuck" not in censor_text("Shut the fuck up", pats, "word")[0].lower()
+    assert star_word("Fucking", "first").startswith("F")
+
+
+def _sub_text(path, index=0):
+    r = subprocess.run([ffmpeg(), "-v", "error", "-i", str(path), "-map", f"0:s:{index}", "-f", "srt", "-"],
+                       capture_output=True, text=True)
+    return r.stdout
+
+
+def test_english_movie_subtitles_catch_missed_words(media_dir, fake_words):
+    f = FilterOptions(words=["mild", "blasphemy", "strong"])
+    p = _project(media_dir / "movie51.mkv", fake_words)
+    pipeline.scan(p, f, Settings(device="cpu"))
+    norms = {x["norm"] for x in p.subtitle_edits}
+    assert {"hell", "shit"} <= norms
+    checks = [m for m in p.mutes if m.get("origin") == "subtitle-check"]
+    # "shit" is in the subtitles at 9.8-11 s but was never heard as a word -> caught by the check
+    assert any("shit" in m["words"] for m in checks), p.mutes
+    # "hell" was heard and muted already -> not added twice
+    assert not any(m["words"].startswith("hell") for m in checks)
+
+
+def test_foreign_dialogue_stars_subtitles_only(media_dir, fake_words, tmp_path):
+    f = FilterOptions(words=["mild", "blasphemy", "strong"], star_style="first")
+    p = _project(media_dir / "movie51.mkv", fake_words)
+    p.dialogue = "foreign"
+    pipeline.scan(p, f, Settings(device="cpu"))
+    assert p.mutes == [] or not p.active_mutes()
+    assert len(p.subtitle_edits) >= 3
+    hell = next(x for x in p.subtitle_edits if x["norm"] == "hell")
+    hell["on"] = False                                  # keep this one as written
+    out = tmp_path / "foreign.mkv"
+    res = pipeline.render_project(p, f, Settings(device="cpu", make_subtitles=False), out)
+    assert res["how"] == "video copied untouched"
+    info = probe(out)
+    assert len(info.subtitles) == 1
+    disp = info.subtitles[0].get("disposition", {})
+    assert disp.get("default") == 1 and disp.get("forced") == 1
+    text = _sub_text(out)
+    assert "What the hell?" in text                      # unticked -> unchanged
+    assert "s***" in text and "shit" not in text
+    assert level(out, 5.2) > -60                         # the sound is untouched
+
+
+def test_skipped_listening_counts_as_scanned(media_dir):
+    p = Project.open(media_dir / "old.avi")
+    p.transcript = {"track": 0, "model": "", "words": [], "skipped": "not English"}
+    assert p.has_transcript(0)
+
+
+def test_picture_subtitles_found(media_dir, tmp_path, monkeypatch):
+    """Finds each picture subtitle with the right timing (the OCR itself is faked here)."""
+    from conftest import PIC_CUES
+    from prude import ocr
+    texts = iter([c[2] for c in PIC_CUES])
+    monkeypatch.setattr(ocr, "engine", lambda: None)
+    monkeypatch.setattr(ocr, "read_text", lambda img: next(texts))
+    info = probe(media_dir / "pgs.mkv")
+    cues = ocr.read_image_subtitles(info, info.subtitles[0], tmp_path)
+    assert [c[2] for c in cues] == [c[2] for c in PIC_CUES]
+    for (a, b, _t), (ea, eb, _e) in zip(cues, PIC_CUES):
+        assert abs(a - ea) <= 0.2 and abs(b - eb) <= 0.2
+
+
+@pytest.mark.skipif(not __import__("importlib").util.find_spec("rapidocr_onnxruntime"),
+                    reason="RapidOCR not installed")
+def test_picture_subtitles_read_and_starred(media_dir, tmp_path):
+    """Spanish dialogue, English picture subtitles: the F-word is starred out in the clean copy."""
+    f = FilterOptions(words=["mild", "blasphemy", "strong"])
+    p = Project.open(media_dir / "pgs.mkv")
+    p.dialogue = "foreign"
+    p.transcript = {"track": 0, "model": "", "words": [], "skipped": "not English"}
+    pipeline.scan(p, f, Settings(device="cpu"))
+    norms = {x["norm"] for x in p.subtitle_edits}
+    assert "fuck" in norms and "shit" in norms, p.subtitle_edits
+    out = tmp_path / "pgs-clean.mkv"
+    pipeline.render_project(p, f, Settings(device="cpu"), out)
+    info = probe(out)
+    assert info.subtitles[0]["codec_name"] == "subrip"
+    assert info.subtitles[0]["disposition"]["default"] == 1
+    text = _sub_text(out)
+    assert "they are coming" in text.lower()
+    assert "fuck" not in text.lower() and "****" in text

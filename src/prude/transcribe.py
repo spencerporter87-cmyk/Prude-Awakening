@@ -40,6 +40,45 @@ def default_model(device):
     return "large-v3" if device == "cuda" else "small.en"
 
 
+def detect_language(wav, duration, models_dir, device="auto", samples=8, progress=None, cancel=None,
+                    log=print):
+    """Which language is spoken? Listens to a few 30-second samples spread through the movie
+    with a small multilingual model. Returns (main_language, english_share, per_sample list)."""
+    models.add_gpu_dll_dirs(models_dir)
+    from faster_whisper import WhisperModel
+    audio = load_wav(wav)
+    path = models.ensure_whisper("tiny", models_dir, progress, cancel)
+    dev = "cuda" if device != "cpu" and cuda_available() else "cpu"
+    try:
+        model = WhisperModel(path, device=dev, compute_type="float16" if dev == "cuda" else "int8")
+    except Exception:
+        model = WhisperModel(path, device="cpu", compute_type="int8")
+    sr, n = 16000, len(audio)
+    win = 30 * sr
+    found = []
+    for k in range(samples):
+        if cancel is not None and cancel.is_set():
+            raise Cancelled()
+        start = int((k + 0.5) / samples * max(0, n - win))
+        chunk = audio[start:start + win]
+        if len(chunk) < sr * 5 or float(abs(chunk).mean()) < 1e-4:
+            continue
+        try:
+            _segs, info = model.transcribe(chunk, language=None, vad_filter=True, beam_size=1)
+        except Exception as e:
+            log(f"Language check skipped a sample: {e}")
+            continue
+        if info.language and info.language_probability >= 0.5:
+            found.append(info.language)
+        if progress:
+            progress((k + 1) / samples, "Checking which language is spoken")
+    if not found:
+        return "en", 1.0, found
+    share = found.count("en") / len(found)
+    main = max(set(found), key=found.count)
+    return main, share, found
+
+
 def transcribe(wav, duration, models_dir, language="en", model_name="", device="auto",
                progress=None, cancel=None, log=print):
     """Returns (words, model_used, device_used). words = [{"w","s","e","p"}]."""
