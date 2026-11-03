@@ -745,9 +745,10 @@ def test_hdr10_metadata_kept(tmp_path):
        "colormatrix=bt2020nc:master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)"
        "L(10000000,1):max-cll=1000,400",
        "-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc",
+       "-bsf:v", "hevc_metadata=colour_primaries=9:transfer_characteristics=16:matrix_coefficients=9",
        "-c:a", "aac", str(src))
     info = probe(src)
-    assert info.is_hdr
+    assert info.is_hdr, {k: v for k, v in info.video.items() if "color" in k or "pix" in k or "profile" in k}
     meta = info.hdr10_metadata()
     assert meta.get("mastering") and int(meta["max_cll"]) == 1000
     params = x265_hdr_params(info)
