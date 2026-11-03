@@ -772,6 +772,23 @@ class ReviewPage(QWidget):
         self.go.setEnabled(bool(mutes or scenes))
 
 
+def clean_timeline(project, filters, duration):
+    """(new_duration, mutes, blackouts, cut_points) for the clean copy's timeline."""
+    scenes = merge_ranges((s["start"], s["end"]) for s in project.active_scenes())
+    labels = {round(s["start"], 2): s.get("label", "Scene") for s in project.active_scenes()}
+    cuts = scenes if filters.scene_action == "cut" else []
+    tm = TimeMap(cuts)
+    mutes = []
+    for m in project.active_mutes():
+        a, b = tm(m["start"]), tm(m["end"])
+        if a is not None and b is not None:
+            mutes.append({"start": a, "end": b, "words": m.get("words", "")})
+    blackouts = [] if cuts else [{"start": a, "end": b, "label": labels.get(round(a, 2), "Scene")}
+                                 for a, b in scenes]
+    cut_points = [(tm(a), b - a, labels.get(round(a, 2), "Scene")) for a, b in cuts]
+    return max(1.0, duration - sum(b - a for a, b in cuts)), mutes, blackouts, cut_points
+
+
 # =========================================================================== Render / done
 
 class RenderPage(QWidget):
@@ -789,14 +806,46 @@ class RenderPage(QWidget):
         lay.addWidget(self.title)
         self.sub = label("", "Muted", wrap=True)
         lay.addWidget(self.sub)
+        self.stats = QWidget()
+        st = QHBoxLayout(self.stats)
+        st.setContentsMargins(0, 8, 0, 0)
+        self.pct = QLabel("0%")
+        self.pct.setStyleSheet("font-size: 34pt; font-weight: 700; color: #2E7D8C;")
+        st.addWidget(self.pct)
+        col = QVBoxLayout()
+        col.setSpacing(2)
+        self.where = label("Starting…", "H2")
+        col.addWidget(self.where)
+        self.eta = label("", "Muted")
+        col.addWidget(self.eta)
+        st.addLayout(col, 1)
+        self.elapsed = label("", "Muted")
+        st.addWidget(self.elapsed, 0, Qt.AlignBottom)
+        lay.addWidget(self.stats)
         self.bar = QProgressBar()
         self.bar.setRange(0, 1000)
         self.bar.setFixedHeight(16)
         lay.addWidget(self.bar)
         self.msg = label("", "Small")
         lay.addWidget(self.msg)
+        self.tl_card = QFrame()
+        self.tl_card.setObjectName("Card")
+        tcl = QVBoxLayout(self.tl_card)
+        tcl.setContentsMargins(10, 10, 14, 8)
+        tcl.addWidget(label("The clean copy so far", "H2"))
+        from .timeline import Timeline, legend
+        self.progress_tl = Timeline()
+        tcl.addWidget(self.progress_tl)
+        tcl.addWidget(legend("result"))
+        lay.addWidget(self.tl_card)
         self.notes = label("", "Muted", wrap=True)
         lay.addWidget(self.notes)
+        from PySide6.QtCore import QElapsedTimer, QTimer
+        self.clock = QElapsedTimer()
+        self.ticker = QTimer(self)
+        self.ticker.setInterval(1000)
+        self.ticker.timeout.connect(self._tick)
+        self.total = 1.0
         self.player = Player(live_toggle=False, timeline_inside=True)
         self.player.setVisible(False)
         lay.addWidget(self.player, 1)
@@ -816,15 +865,31 @@ class RenderPage(QWidget):
         lay.addLayout(self.btns)
         self.output = None
 
-    def start(self, name, out, reencode):
+    def start(self, name, out, reencode, project=None, filters=None, duration=None):
         self.output = None
         self.title.setText("Making the clean copy")
         self.sub.setText(f"Saving to {out}" + ("\nThe video is being re-encoded, so this takes a while — "
                                                "you can leave it running." if reencode else ""))
-        self.bar.setValue(0)
+        self.bar.setRange(0, 0)      # "busy" animation until the first numbers arrive
         self.msg.setText("")
         self.notes.setText("")
+        self.pct.setText("0%")
+        self.where.setText("Starting…")
+        self.eta.setText("Getting the encoder ready")
+        self.stats.setVisible(True)
+        if project is not None and filters is not None and duration:
+            self.total, mutes, blacks, cuts = clean_timeline(project, filters, duration)
+            self.progress_tl.set_result(self.total, mutes, blacks, cuts)
+            self.progress_tl.set_fill(0)
+            self.progress_tl.set_position(0)
+            self.tl_card.setVisible(True)
+        else:
+            self.tl_card.setVisible(False)
+        self.clock.start()
+        self.ticker.start()
+        self._tick()
         self.cancel_btn.setVisible(True)
+        self.cancel_btn.setEnabled(True)
         self.player.stop()
         self.player.setVisible(False)
         self.spacer.setVisible(True)
@@ -832,11 +897,28 @@ class RenderPage(QWidget):
         for b in (self.play_btn, self.folder_btn, self.again_btn, self.review_btn, self.ext_btn):
             b.setVisible(False)
 
+    def _tick(self):
+        secs = self.clock.elapsed() / 1000 if self.clock.isValid() else 0
+        self.elapsed.setText(f"Running for {fmt_time(secs, False)}")
+
     def on_progress(self, _stage, frac, msg):
-        self.bar.setValue(int(frac * 1000))
-        self.msg.setText(f"{int(frac * 100)}%  ·  {msg}")
+        if frac > 0 and self.bar.maximum() == 0:
+            self.bar.setRange(0, 1000)
+        if self.bar.maximum():
+            self.bar.setValue(int(frac * 1000))
+        self.pct.setText(f"{int(frac * 100)}%")
+        pos = frac * self.total
+        self.where.setText(f"{fmt_time(pos, False)} of {fmt_time(self.total, False)} saved")
+        parts = [p for p in (msg or "").split(" · ")[1:]]
+        self.eta.setText(" · ".join(parts) if parts else (msg or ""))
+        self.progress_tl.set_fill(pos)
+        self.progress_tl.set_position(pos)
 
     def done(self, result):
+        self.ticker.stop()
+        self.stats.setVisible(False)
+        self.tl_card.setVisible(False)
+        self.bar.setRange(0, 1000)
         self.output = result["output"]
         self.title.setText("✓  Your clean copy is ready")
         self.sub.setText(self.output)
@@ -858,19 +940,7 @@ class RenderPage(QWidget):
     def show_result(self, result, project, filters, duration):
         """Player for the clean copy + timeline of what changed (in the clean copy's time)."""
         self.done(result)
-        scenes = merge_ranges((s["start"], s["end"]) for s in project.active_scenes())
-        labels = {(round(s["start"], 2)): s.get("label", "Scene") for s in project.active_scenes()}
-        cuts = scenes if filters.scene_action == "cut" else []
-        tm = TimeMap(cuts)
-        mutes = []
-        for m in project.active_mutes():
-            a, b = tm(m["start"]), tm(m["end"])
-            if a is not None and b is not None:
-                mutes.append({"start": a, "end": b, "words": m.get("words", "")})
-        blackouts = [] if cuts else [{"start": a, "end": b, "label": labels.get(round(a, 2), "Scene")}
-                                     for a, b in scenes]
-        cut_points = [(tm(a), b - a, labels.get(round(a, 2), "Scene")) for a, b in cuts]
-        new_dur = max(1.0, duration - sum(b - a for a, b in cuts))
+        new_dur, mutes, blackouts, cut_points = clean_timeline(project, filters, duration)
         self.player.timeline.set_result(new_dur, mutes, blackouts, cut_points)
         self.player.set_legend("result")
         self.player.setVisible(True)

@@ -273,6 +273,8 @@ class MainWindow(QMainWindow):
             self.worker.cancel()
             self.scanp.cancel_btn.setEnabled(False)
             self.scanp.cancel_btn.setText("Stopping…")
+            self.renderp.cancel_btn.setEnabled(False)
+            self.renderp.ticker.stop()
 
     # ------------------------------------------------------------ rendering
     def start_render(self):
@@ -290,7 +292,7 @@ class MainWindow(QMainWindow):
         reencode = bool(self.project.active_scenes())
         self._filters_used = f
         self.review.leave()
-        self.renderp.start(Path(self.project.source).name, out, reencode)
+        self.renderp.start(Path(self.project.source).name, out, reencode, self.project, f, self.info.duration)
         self.stack.setCurrentWidget(self.renderp)
         self.worker = Worker(render_project, self.project, f, self.settings, out)
         self.worker.progress.connect(self.renderp.on_progress)

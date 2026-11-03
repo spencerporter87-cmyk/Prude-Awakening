@@ -39,6 +39,7 @@ class Timeline(QWidget):
         self.action = "cut"
         self.mode = "plan"
         self.pos = None
+        self.fill = None
         self._hits = []
 
     # ------------------------------------------------------------ data
@@ -54,6 +55,11 @@ class Timeline(QWidget):
         self.mutes = [dict(m, on=True) for m in mutes]
         self.scenes = [dict(s, on=True) for s in blackouts]
         self.cut_points = list(cut_points)
+        self.update()
+
+    def set_fill(self, t):
+        """Shade the part that's finished (used while saving)."""
+        self.fill = None if t is None else max(0.0, float(t))
         self.update()
 
     def set_position(self, t):
@@ -86,6 +92,12 @@ class Timeline(QWidget):
             p.setPen(Qt.NoPen)
             p.setBrush(TRACK)
             p.drawRoundedRect(QRectF(x0, y, x1 - x0, lane_h), 6, 6)
+
+        if self.fill is not None:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(46, 125, 140, 70))
+            p.drawRoundedRect(QRectF(x0, lanes[0][1] - 3, max(0.0, self._x(self.fill) - x0),
+                                     lanes[1][1] + lane_h - lanes[0][1] + 6), 6, 6)
 
         # scenes lane
         y = lanes[0][1]

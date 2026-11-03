@@ -91,9 +91,10 @@ def run_tour(app, out_dir: Path, video=None):
         add(lambda: shot("5-review-scenes"))
 
         def fake_render():
-            w.renderp.start(Path(video).name, Path(video).with_name("demo (clean).mkv"), True)
+            w.renderp.start(Path(video).name, Path(video).with_name("demo (clean).mkv"), True,
+                            w.project, w._filters, w.info.duration)
             w.stack.setCurrentWidget(w.renderp)
-            w.renderp.on_progress("render", 0.37, "Making the clean copy (re-encoding video)")
+            w.renderp.on_progress("render", 0.37, "Re-encoding · 3.4× speed · about 12 min left")
         add(fake_render)
         add(lambda: shot("6-rendering"))
         add(lambda: w.renderp.show_result(

@@ -34,32 +34,80 @@ def run(cmd, **kw):
                           stdin=subprocess.DEVNULL, creationflags=NO_WINDOW, **kw)
 
 
-def run_ffmpeg(cmd, duration, progress=None, cancel=None, label="Working"):
-    """Run an ffmpeg command (without -progress) and report 0..1 progress.
+def _fmt_left(sec):
+    sec = int(max(0, sec))
+    if sec < 60:
+        return "under a minute"
+    h, m = sec // 3600, sec % 3600 // 60
+    return f"{h} h {m:02d} min" if h else f"{m} min"
+
+
+def run_ffmpeg(cmd, duration, progress=None, cancel=None, label="Working", fps=None):
+    """Run an ffmpeg command (without -progress) and report 0..1 progress with a message like
+    "Making the clean copy · 3.2× speed · about 12 min left".
     Raises MediaError with ffmpeg's message on failure, Cancelled on cancel."""
+    import collections
+    import threading
+    import time
     full = [cmd[0], "-nostdin", "-hide_banner", "-loglevel", "error", "-nostats",
-            "-progress", "pipe:1"] + list(cmd[1:])
+            "-progress", "pipe:1", "-stats_period", "0.5"] + list(cmd[1:])
     proc = subprocess.Popen(full, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, encoding="utf-8", errors="replace",
-                            creationflags=NO_WINDOW)
+                            text=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
+    tail = collections.deque(maxlen=200)
+
+    def drain():  # keep stderr flowing so ffmpeg never blocks on a full pipe
+        for ln in proc.stderr:
+            tail.append(ln.rstrip())
+    t_err = threading.Thread(target=drain, daemon=True)
+    t_err.start()
+    t0 = time.time()
+    block = {}
     try:
         for line in proc.stdout:
             if cancel is not None and cancel.is_set():
                 proc.kill()
                 raise Cancelled()
-            if line.startswith("out_time_us=") and duration and progress:
+            if "=" not in line:
+                continue
+            k, v = line.strip().split("=", 1)
+            block[k] = v
+            if k != "progress" or not progress or not duration:
+                continue
+            pos = None
+            for key, scale in (("out_time_us", 1e6), ("out_time_ms", 1e6)):
                 try:
-                    pos = int(line.split("=", 1)[1]) / 1e6
-                    progress(min(1.0, max(0.0, pos / duration)), label)
+                    pos = int(block.get(key, "")) / scale
+                    break
                 except ValueError:
                     pass
-        err = proc.stderr.read()
+            if (pos is None or pos <= 0) and fps:
+                try:
+                    pos = int(block.get("frame", "0")) / fps
+                except ValueError:
+                    pos = None
+            frac = min(1.0, max(0.0, (pos or 0) / duration))
+            bits = [label]
+            spd = block.get("speed", "").strip().rstrip("x")
+            try:
+                if float(spd) > 0:
+                    bits.append(f"{float(spd):.1f}× speed")
+            except ValueError:
+                pass
+            elapsed = time.time() - t0
+            if frac > 0.01:
+                bits.append(f"about {_fmt_left(elapsed / frac * (1 - frac))} left")
+            elif elapsed > 2:
+                bits.append("starting up…")
+            progress(frac, " · ".join(bits))
+            block = {}
         proc.wait()
+        t_err.join(timeout=5)
     finally:
         if proc.poll() is None:
             proc.kill()
     if proc.returncode != 0:
-        raise MediaError(err.strip()[-3000:] or f"ffmpeg exited with code {proc.returncode}")
+        err = "\n".join(tail).strip()
+        raise MediaError(err[-3000:] or f"ffmpeg exited with code {proc.returncode}")
     if progress:
         progress(1.0, label)
 

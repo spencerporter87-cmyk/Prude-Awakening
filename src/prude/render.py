@@ -245,8 +245,9 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
 
     log(f"Rendering: {how}; {len(mutes)} mutes, {len(cuts)} cuts, {len(blackouts)} blacked-out scenes.")
     try:
+        log("ffmpeg " + " ".join(f'"{c}"' if " " in str(c) else str(c) for c in cmd[1:])[:4000])
         run_ffmpeg(cmd, max(1.0, info.duration - cut_total), progress, cancel,
-                   "Making the clean copy" + (" (re-encoding video)" if vgraph else ""))
+                   "Re-encoding" if vgraph else "Copying", fps=info.fps)
     except BaseException:
         out.unlink(missing_ok=True)
         raise
