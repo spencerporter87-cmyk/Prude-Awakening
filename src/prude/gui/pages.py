@@ -221,9 +221,9 @@ class SetupPage(QWidget):
         self.scene_note = label("", "Small", wrap=True)
         sc.lay.addWidget(self.scene_note)
         sc.lay.addStretch()
-        grid.addWidget(sc, 0, 1)
+        grid.addWidget(sc, 1, 0)          # stacked: each card gets the full width
         grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
+        grid.setVerticalSpacing(16)
 
         # ---- footer
         foot = QHBoxLayout()
@@ -434,26 +434,29 @@ class SceneRow(QFrame):
         super().__init__()
         self.s, self.source, self.on_change = scene, source, on_change
         self.setObjectName("Card")
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(12, 10, 12, 10)
-        lay.setSpacing(14)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(12, 10, 12, 10)
+        outer.setSpacing(6)
+        top = QHBoxLayout()
+        top.setSpacing(12)
         self.pic = QLabel()
-        self.pic.setFixedSize(128, 72)
+        self.pic.setFixedSize(112, 63)
         self.pic.setStyleSheet("background: #222; border-radius: 8px;")
         self.pic.setAlignment(Qt.AlignCenter)
-        lay.addWidget(self.pic)
+        top.addWidget(self.pic, 0, Qt.AlignTop)
         self.set_blur(blurred)
-        col = QVBoxLayout()
-        head = QHBoxLayout()
+        info = QVBoxLayout()
+        info.setSpacing(2)
         t = label(scene.get("label", "Scene"), "H2")
         t.setWordWrap(True)
-        head.addWidget(t, 1)
-        if scene.get("score") is not None and not scene.get("manual"):
-            conf = int(float(scene["score"]) * 100)
-            head.addWidget(label(f"{conf}% sure", "Muted"), 0, Qt.AlignTop)
-        col.addLayout(head)
+        info.addWidget(t)
+        bits = []
         if scene.get("detail"):
-            col.addWidget(label(scene["detail"].capitalize(), "Small", wrap=True))
+            bits.append(scene["detail"].capitalize())
+        if scene.get("score") is not None and not scene.get("manual"):
+            bits.append(f"{int(float(scene['score']) * 100)}% sure")
+        if bits:
+            info.addWidget(label(" · ".join(bits), "Small", wrap=True))
         times = QHBoxLayout()
         self.a, self.b = TimeEdit(scene["start"]), TimeEdit(scene["end"])
         self.a.changed.connect(self._times)
@@ -464,7 +467,9 @@ class SceneRow(QFrame):
         self.len = label("", "Muted")
         times.addWidget(self.len)
         times.addStretch()
-        col.addLayout(times)
+        info.addLayout(times)
+        top.addLayout(info, 1)
+        outer.addLayout(top)
         btns = QHBoxLayout()
         btns.addWidget(button("▶ Play", None, lambda: on_play(self.s) if on_play else
                               play_clip(source, self.s["start"], self.s["end"], scene.get("label", "Scene"))))
@@ -479,8 +484,7 @@ class SceneRow(QFrame):
         self.act.setEnabled(scene.get("on", True))
         self.act.currentIndexChanged.connect(self._action)
         btns.addWidget(self.act, 1)
-        col.addLayout(btns)
-        lay.addLayout(col, 1)
+        outer.addLayout(btns)
         self._times()
 
     def set_blur(self, blurred):
@@ -490,7 +494,7 @@ class SceneRow(QFrame):
             self.pic.setText("No picture")
             self.pic.setStyleSheet("background: #EFE6D9; color: #6B566E; border-radius: 8px;")
         else:
-            self.pic.setPixmap(pm.scaled(128, 72, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
+            self.pic.setPixmap(pm.scaled(112, 63, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
 
     def _times(self, *_):
         a, b = self.a.seconds(), self.b.seconds()
@@ -541,9 +545,9 @@ class ReviewPage(QWidget):
         main = QHBoxLayout()
         main.setSpacing(16)
         self.player = Player(live_toggle=True, timeline_inside=False)
-        main.addWidget(self.player, 5)
+        main.addWidget(self.player, 1)
         self.tabs = QTabWidget()
-        main.addWidget(self.tabs, 6)
+        main.addWidget(self.tabs, 1)
         lay.addLayout(main, 1)
         tl_card = QFrame()
         tl_card.setObjectName("Card")

@@ -25,7 +25,7 @@ class CategoryBox(QCheckBox):
 
 class WordCategory(QWidget):
     changed = Signal()
-    COLS = 3
+    COLS = 4
 
     def __init__(self, key, name, desc, masked=False, parent=None):
         super().__init__(parent)

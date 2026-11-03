@@ -64,9 +64,9 @@ class SceneGroup(QFrame):
                 cb.setToolTip(tdesc)
                 cb.toggled.connect(self._toggled)
                 self.boxes[key] = cb
-                grid.addWidget(cb, i // 2, i % 2)
-            grid.setColumnStretch(0, 1)
-            grid.setColumnStretch(1, 1)
+                grid.addWidget(cb, i // 3, i % 3)
+            for c in range(3):
+                grid.setColumnStretch(c, 1)
             lay.addLayout(grid)
         self.text = None
         if text_box:
