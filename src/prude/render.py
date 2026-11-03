@@ -209,6 +209,17 @@ AUDIO_NAMES = {"ac3": "Dolby Digital (AC3)", "eac3": "Dolby Digital Plus", "aac"
                "libopus": "Opus", "libmp3lame": "MP3"}
 
 
+def _remove(path, tries=10):
+    """Delete a file that a just-stopped program may still hold open for a moment (Windows)."""
+    import time
+    for _ in range(tries):
+        try:
+            Path(path).unlink(missing_ok=True)
+            return
+        except PermissionError:
+            time.sleep(0.3)
+
+
 def validate(out: Path, expected_duration, want_video, want_subs):
     """Check the finished file with ffprobe. Returns (ok, problems, info)."""
     from .media import probe
@@ -473,7 +484,7 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
                    (lambda f, m: progress(0.03 + 0.97 * f, m)) if (progress and parts) else progress,
                    cancel, "Re-encoding" if vgraph else "Copying", fps=info.fps, cwd=out.parent)
     except BaseException:
-        partial.unlink(missing_ok=True)
+        _remove(partial)
         raise
     finally:
         for f in tmp_files:

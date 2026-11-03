@@ -556,7 +556,8 @@ def test_batch_cancel_and_retry(media_dir, tmp_path, fake_words):
             stop.set()
     run_queue(q, Settings(), on_change=change, cancel=stop)
     j = q.jobs[0]
-    assert j.status == CANCELLED and not list((tmp_path / "o").glob("*.partial*"))
+    assert j.status == CANCELLED, (j.status, j.error, j.log[-5:] if hasattr(j, "log") else "")
+    assert not list((tmp_path / "o").glob("*.partial*"))
     q.retry(j)
     run_queue(q, Settings(), cancel=threading.Event())
     assert j.status == DONE and j.attempts == 2

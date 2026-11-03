@@ -111,6 +111,10 @@ def run_ffmpeg(cmd, duration, progress=None, cancel=None, label="Working", fps=N
     finally:
         if proc.poll() is None:
             proc.kill()
+        try:
+            proc.wait(timeout=15)          # Windows: the output file stays locked until it has exited
+        except Exception:                  # noqa: BLE001
+            pass
     if proc.returncode != 0:
         err = "\n".join(tail).strip()
         raise MediaError(err[-3000:] or f"ffmpeg exited with code {proc.returncode}")
