@@ -10,6 +10,10 @@ from pathlib import Path
 from .paths import NO_WINDOW, find_tool
 
 
+VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".mov", ".avi", ".wmv", ".ts", ".m2ts", ".mts",
+              ".mpg", ".mpeg", ".webm", ".flv", ".vob", ".divx", ".3gp", ".ogv"}
+
+
 class Cancelled(Exception):
     """The user pressed Cancel."""
 

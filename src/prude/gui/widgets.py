@@ -9,8 +9,7 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit, QProgress
 
 from ..paths import DATA_DIR
 
-VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".mov", ".avi", ".wmv", ".ts", ".m2ts", ".mts",
-              ".mpg", ".mpeg", ".webm", ".flv", ".vob", ".divx", ".3gp", ".ogv"}
+from ..media import VIDEO_EXTS  # noqa: F401  (re-exported for the GUI)
 
 
 def app_icon() -> QIcon:
@@ -60,6 +59,7 @@ class Card(QFrame):
 
 class DropZone(QFrame):
     fileDropped = Signal(str)
+    filesDropped = Signal(list)      # several files, or folders -> batch
     browse = Signal()
 
     def __init__(self, parent=None):
@@ -77,7 +77,7 @@ class DropZone(QFrame):
         t = label("Drop a movie or TV episode here", "H2")
         t.setAlignment(Qt.AlignCenter)
         lay.addWidget(t)
-        s = label("MKV, MP4, AVI, MOV, WMV, TS and more", "Muted")
+        s = label("MKV, MP4, AVI, MOV, WMV, TS and more · drop several files or a folder for a batch", "Muted")
         s.setAlignment(Qt.AlignCenter)
         lay.addWidget(s)
         row = QHBoxLayout()
@@ -102,6 +102,10 @@ class DropZone(QFrame):
 
     def dropEvent(self, e):
         self._set_hover(False)
+        paths = [u.toLocalFile() for u in e.mimeData().urls() if u.toLocalFile()]
+        if len(paths) > 1 or any(Path(p).is_dir() for p in paths):
+            self.filesDropped.emit(paths)
+            return
         for url in e.mimeData().urls():
             p = url.toLocalFile()
             if p and Path(p).suffix.lower() in VIDEO_EXTS:

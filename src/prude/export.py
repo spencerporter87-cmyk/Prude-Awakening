@@ -48,9 +48,47 @@ def parse_title(src: Path):
     return clean_name(re.sub(r"[._]+", " ", src.stem)), ""
 
 
+EPISODE = re.compile(r"(?i)\bS(\d{1,2})[ ._-]*E(\d{1,3})\b|\b(\d{1,2})x(\d{2,3})\b")
+SEASON_DIR = re.compile(r"(?i)^(season|series|staffel|saison)[ ._-]*(\d{1,2})$|^s(\d{1,2})$")
+
+
+def parse_episode(src: Path):
+    """For TV episodes: (show_folder, show_name, year, season) - otherwise None.
+    Understands 'Show (2005)/Season 01/Show - S01E02 - Title.mkv' and 'Show.S01E02.mkv'."""
+    m = EPISODE.search(src.stem)
+    if not m:
+        return None
+    season = int(m.group(1) or m.group(3))
+    parent = src.parent
+    if SEASON_DIR.match(parent.name.strip()):
+        show_dir = parent.parent
+        show_title, year = parse_title(Path(show_dir.name + ".mkv"))
+    else:
+        before = src.stem[:m.start()]
+        show_title, year = parse_title(Path((before.strip(" ._-") or parent.name) + ".mkv"))
+        folder_title, _y = parse_title(Path(parent.name + ".mkv"))
+        # inside the show's own folder -> save beside it; loose in e.g. Downloads -> save right there
+        if folder_title.lower() == show_title.lower():
+            show_dir, show_title, year = parent, folder_title, year or _y
+        else:
+            show_dir = parent / "_"
+    return show_dir, show_title, year, season
+
+
 def output_path(src: Path, opts: ExportOptions) -> Path:
     src = Path(src)
     ext = ".mp4" if opts.container == "mp4" else ".mkv"
+    ep = parse_episode(src) if opts.naming != "simple" else None
+    if ep:   # TV: Plex puts editions on the show folder ("Show (2005) {edition-Family Edit}")
+        show_dir, show, year, season = ep
+        show_base = f"{show} ({year})" if year else show
+        if opts.naming == "plex_edition":
+            show_base += f" {{edition-{clean_name(opts.edition) or 'Family Edit'}}}"
+        root = Path(opts.folder) if opts.folder else show_dir.parent
+        out = root / show_base / f"Season {season:02d}" / f"{src.stem}{ext}"
+        if out.resolve() == src.resolve():
+            out = out.with_name(f"{src.stem} (clean){ext}")
+        return out
     title, year = parse_title(src)
     base = f"{title} ({year})" if year else title
     if opts.naming == "plex_edition":

@@ -472,3 +472,101 @@ def test_copy_only_export_is_marked_untouched(media_dir, fake_words, tmp_path):
     assert res["how"] == "video copied untouched" and res["valid"]
     assert any("bit-for-bit" in w for w in res["warnings"])
     assert video_md5(media_dir / "movie51.mkv") == video_md5(res["output"])
+
+
+# ---------------------------------------------------------------- TV naming
+def test_tv_episode_names():
+    from prude.export import ExportOptions, output_path
+    ed = ExportOptions(naming="plex_edition", edition="Family Edit")
+    p = Path("/tv/The Office (US) (2005)/Season 02/The Office (US) - S02E03 - Office Olympics.mkv")
+    assert output_path(p, ed) == Path("/tv/The Office (US) (2005) {edition-Family Edit}/Season 02/"
+                                      "The Office (US) - S02E03 - Office Olympics.mkv")
+    assert output_path(Path("/dl/Bluey.S01E05.1080p.mkv"), ed) == \
+        Path("/dl/Bluey {edition-Family Edit}/Season 01/Bluey.S01E05.1080p.mkv")
+    assert output_path(Path("/tv/Friends/friends.1x04.avi"), ed) == \
+        Path("/tv/Friends {edition-Family Edit}/Season 01/friends.1x04.mkv")
+    lib = ExportOptions(naming="plex_library", folder="/family")
+    assert output_path(p, lib) == Path("/family/The Office (US) (2005)/Season 02/"
+                                       "The Office (US) - S02E03 - Office Olympics.mkv")
+
+
+# ---------------------------------------------------------------- batch queue
+def _batch_movies(media_dir, tmp_path, fake_words, names):
+    out = []
+    for n in names:
+        dst = tmp_path / "in" / n
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes((media_dir / "movie51.mkv").read_bytes())
+        p = Project.open(dst)
+        p.transcript = {"track": 0, "model": "fake", "words": fake_words}
+        p.save()
+        out.append(dst)
+    return out
+
+
+def test_batch_queue_runs_saves_and_reviews(media_dir, tmp_path, fake_words):
+    import threading
+    from dataclasses import asdict
+    from prude.export import ExportOptions
+    from prude.jobs import DONE, FAILED, REVIEW, Queue, run_queue
+    a, b = _batch_movies(media_dir, tmp_path, fake_words, ["Up (2009).mkv", "Cars (2006).mkv"])
+    q = Queue(tmp_path / "queue.json")
+    f = asdict(FilterOptions(words=["mild", "blasphemy"]))
+    ex = ExportOptions(folder=str(tmp_path / "out"), naming="plex_edition", edition="Family").to_dict()
+    q.add([a, b], "Family night", f, ex, mode="save")
+    q.add([b], "Family night", f, ex)                       # duplicate: ignored
+    q.add([tmp_path / "gone.mkv"], "Family night", f, ex)    # missing file: fails cleanly
+    rv = _batch_movies(media_dir, tmp_path, fake_words, ["Show.S01E02.mkv"])
+    q.add(rv, "Kids", f, ex, mode="review")
+    assert len(q.jobs) == 4
+    seen = []
+    run_queue(q, Settings(), on_change=lambda j: seen.append((j.name, j.status)), cancel=threading.Event())
+    st = {j.name: j.status for j in q.jobs}
+    assert st == {"Up (2009).mkv": DONE, "Cars (2006).mkv": DONE, "gone.mkv": FAILED,
+                  "Show.S01E02.mkv": REVIEW}
+    assert (tmp_path / "out" / "Up (2009)" / "Up (2009) {edition-Family}.mkv").exists()
+    assert (tmp_path / "out" / "Cars (2006)" / "Cars (2006) {edition-Family}.mkv").exists()
+    failed = [j for j in q.jobs if j.status == FAILED][0]
+    assert "no longer there" in failed.error and any("Failed" in ln for ln in failed.log)
+    # saved to disk; reloading keeps everything
+    q2 = Queue(tmp_path / "queue.json")
+    assert {j.name: j.status for j in q2.jobs} == st
+
+
+def test_batch_resume_after_restart(tmp_path):
+    from prude.jobs import QUEUED, RUNNING, Job, Queue
+    q = Queue(tmp_path / "q.json")
+    q.jobs = [Job(source="x.mkv", status=RUNNING, progress=0.5)]
+    q.save()
+    q2 = Queue(tmp_path / "q.json")
+    assert q2.jobs[0].status == QUEUED and q2.jobs[0].progress == 0.0 and "Interrupted" in q2.jobs[0].message
+
+
+def test_batch_cancel_and_retry(media_dir, tmp_path, fake_words):
+    import threading
+    from dataclasses import asdict
+    from prude.jobs import CANCELLED, DONE, Queue, run_queue
+    (a,) = _batch_movies(media_dir, tmp_path, fake_words, ["Heat (1995).mkv"])
+    q = Queue(tmp_path / "q.json")
+    q.add([a], "P", asdict(FilterOptions(words=["mild"])), {"folder": str(tmp_path / "o"), "naming": "simple"})
+    stop = threading.Event()
+
+    def change(job):
+        if job.status == "running":   # press Cancel as soon as it starts
+            stop.set()
+    run_queue(q, Settings(), on_change=change, cancel=stop)
+    j = q.jobs[0]
+    assert j.status == CANCELLED and not list((tmp_path / "o").glob("*.partial*"))
+    q.retry(j)
+    run_queue(q, Settings(), cancel=threading.Event())
+    assert j.status == DONE and j.attempts == 2
+
+
+def test_expand_folders(tmp_path):
+    from prude.jobs import expand_sources
+    (tmp_path / "S" / "Season 01").mkdir(parents=True)
+    for n in ["Show - S01E10.mkv", "Show - S01E2.mkv", "Show - S01E1.mkv", "notes.txt",
+              "Show - S01E1 (clean).mkv", "x {edition-Family}.mkv"]:
+        (tmp_path / "S" / "Season 01" / n).write_bytes(b"x")
+    names = [p.name for p in expand_sources([tmp_path / "S"])]
+    assert names == ["Show - S01E1.mkv", "Show - S01E2.mkv", "Show - S01E10.mkv"]

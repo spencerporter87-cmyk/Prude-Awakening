@@ -141,6 +141,31 @@ def run_tour(app, out_dir: Path, video=None):
         add(lambda: shot("7-done"))
         add(lambda: w.renderp.leave())
 
+    def batch_shot():
+        from ..jobs import Job
+        w.queue.jobs = [
+            Job(source="C:/Movies/Up (2009)/Up (2009).mkv", preset="Family night", status="done", progress=1.0,
+                message="Saved: Up (2009) {edition-Family Edit}.mkv"),
+            Job(source="C:/TV/The Office (US)/Season 02/The Office (US) - S02E03.mkv", preset="Kids",
+                status="running", progress=0.42, message="Listening… about 4 min left"),
+            Job(source="C:/TV/The Office (US)/Season 02/The Office (US) - S02E04.mkv", preset="Kids",
+                message="Waiting"),
+            Job(source="C:/Movies/Heat (1995).mkv", preset="Everything", status="needs_review", progress=1.0,
+                mode="review", message="Found 41 words and 6 scenes - open it to review"),
+            Job(source="C:/Movies/Old Rip.avi", preset="Family night", status="failed",
+                error="The file is no longer there: C:/Movies/Old Rip.avi")]
+        w.batch.refresh()
+        w.stack.setCurrentWidget(w.batch)
+    add(batch_shot, 800)
+    add(lambda: shot("9-batch"))
+    if video:
+        def add_shot():
+            from .batch import AddBatchDialog
+            d = AddBatchDialog(w.settings, [video], w)
+            d.show()
+            QTimer.singleShot(500, lambda: (shot("9b-batch-add", d), d.close()))
+        add(add_shot, 1000)
+
     def settings_shot():
         d = SettingsDialog(w.settings, w, gpu_present=True)
         d.show()

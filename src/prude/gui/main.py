@@ -17,6 +17,8 @@ from ..project import Project
 from ..render import output_path
 from ..scenes import CLIP_FOR
 from ..settings import FilterOptions, Settings
+from ..jobs import Queue
+from .batch import BatchPage
 from .pages import HomePage, RenderPage, ReviewPage, ScanPage, SetupPage
 from .settings_dialog import SettingsDialog
 from .style import QSS
@@ -51,8 +53,15 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.stack)
         self.home, self.setup, self.scanp = HomePage(), SetupPage(), ScanPage()
         self.review, self.renderp = ReviewPage(), RenderPage()
-        for w in (self.home, self.setup, self.scanp, self.review, self.renderp):
+        self.queue = Queue()
+        self.batch = BatchPage(self.queue, settings, is_busy=lambda: self.worker is not None and self.worker.isRunning())
+        for w in (self.home, self.setup, self.scanp, self.review, self.renderp, self.batch):
             self.stack.addWidget(w)
+        self.batch.back.connect(self.go_home)
+        self.batch.openReview.connect(self.open_review)
+        self.home.openBatch.connect(self.show_batch)
+        self.home.openFiles.connect(self.add_to_batch)
+        self._update_batch_button()
         self.home.openFile.connect(self.open_file)
         self.home.browse.connect(self.browse)
         self.home.openSettings.connect(self.open_settings)
@@ -87,7 +96,39 @@ class MainWindow(QMainWindow):
         box.exec()
 
     def busy(self):
+        if self.batch.running():
+            QMessageBox.information(self, "The batch is running",
+                                    "The batch is using the graphics card. Pause it (Batch → Pause) first.")
+            return True
         return self.worker is not None and self.worker.isRunning()
+
+    # ------------------------------------------------------------ batch
+    def _update_batch_button(self):
+        waiting = sum(1 for j in self.queue.jobs if j.status == "queued")
+        self.home.batch_btn.setText(f"☰  Batch ({waiting} waiting)" if waiting else "☰  Batch")
+
+    def show_batch(self):
+        self.batch.refresh()
+        self.stack.setCurrentWidget(self.batch)
+
+    def add_to_batch(self, paths):
+        self.show_batch()
+        self.batch.add_dialog(paths)
+        self._update_batch_button()
+
+    def open_review(self, source, filters):
+        try:
+            info = probe(source)
+        except Exception as e:
+            self.error("Can't open this file", str(e))
+            return
+        self.info, self.project = info, Project.open(source)
+        f = FilterOptions.from_dict(filters)
+        self._filters = f
+        self.setup.set_movie(info, self.project, self.settings, self._scan_note())
+        self.setup.apply(f)
+        self.review.set_project(self.project, info, self.settings, f)
+        self.stack.setCurrentWidget(self.review)
 
     # ------------------------------------------------------------ files
     def dragEnterEvent(self, e):
@@ -95,9 +136,11 @@ class MainWindow(QMainWindow):
             e.acceptProposedAction()
 
     def dropEvent(self, e):
-        urls = e.mimeData().urls()
-        if urls:
-            self.open_file(urls[0].toLocalFile())
+        paths = [u.toLocalFile() for u in e.mimeData().urls() if u.toLocalFile()]
+        if len(paths) > 1 or any(Path(p).is_dir() for p in paths):
+            self.add_to_batch(paths)
+        elif paths:
+            self.open_file(paths[0])
 
     def browse(self):
         exts = " ".join(f"*{x}" for x in sorted(VIDEO_EXTS))
@@ -147,8 +190,9 @@ class MainWindow(QMainWindow):
             self.setup.note.setText(self._scan_note())
 
     def go_home(self):
-        if self.busy():
+        if self.worker is not None and self.worker.isRunning():
             return
+        self._update_batch_button()
         self.home.set_recent(self.settings.recent)
         self.stack.setCurrentWidget(self.home)
 
@@ -331,7 +375,20 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ window
     def closeEvent(self, e):
-        if self.busy():
+        if self.batch.running():
+            r = QMessageBox.question(self, "Stop the batch and quit?",
+                                     "The batch is running. Quit anyway? It will pick up where it left off "
+                                     "next time you press Start.")
+            if r != QMessageBox.Yes:
+                e.ignore()
+                return
+            current = [j for j in self.queue.jobs if j.status == "running"]
+            self.batch.runner.pause_after_current()
+            self.batch.runner.cancel_current()
+            self.batch.runner.wait(8000)
+            for j in current:            # resume it next time instead of leaving it "cancelled"
+                self.queue.retry(j)
+        if self.worker is not None and self.worker.isRunning():
             r = QMessageBox.question(self, "Stop and quit?", "A scan or save is still running. Stop it and quit?")
             if r != QMessageBox.Yes:
                 e.ignore()

@@ -58,8 +58,10 @@ def play_clip(source, start, end, title="Preview"):
 
 class HomePage(QWidget):
     openFile = Signal(str)
+    openFiles = Signal(list)
     browse = Signal()
     openSettings = Signal()
+    openBatch = Signal()
 
     def __init__(self):
         super().__init__()
@@ -76,10 +78,14 @@ class HomePage(QWidget):
         col.addWidget(label("Prude Awakening", "H1"))
         col.addWidget(label("Mutes bad language and removes scenes you'd rather not see.", "Muted"))
         top.addLayout(col, 1)
+        self.batch_btn = button("☰  Batch", None, self.openBatch.emit,
+                                tip="Several movies or a whole TV season, one after another")
+        top.addWidget(self.batch_btn, 0, Qt.AlignTop)
         top.addWidget(button("⚙  Settings", None, self.openSettings.emit), 0, Qt.AlignTop)
         lay.addLayout(top)
         self.drop = DropZone()
         self.drop.fileDropped.connect(self.openFile.emit)
+        self.drop.filesDropped.connect(self.openFiles.emit)
         self.drop.browse.connect(self.browse.emit)
         lay.addWidget(self.drop, 1)
         self.recent_box = QVBoxLayout()
