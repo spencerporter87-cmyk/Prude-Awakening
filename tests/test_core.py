@@ -740,12 +740,11 @@ def test_hdr10_metadata_kept(tmp_path):
         pytest.skip("no libx265")
     src = tmp_path / "hdr.mkv"
     ff("-f", "lavfi", "-i", "testsrc2=s=640x360:r=24:d=6", "-f", "lavfi", "-i", "sine=f=400:d=6",
+       "-vf", "setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc",
        "-c:v", "libx265", "-preset", "ultrafast", "-pix_fmt", "yuv420p10le",
        "-x265-params", "log-level=error:hdr10=1:repeat-headers=1:colorprim=bt2020:transfer=smpte2084:"
        "colormatrix=bt2020nc:master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)"
        "L(10000000,1):max-cll=1000,400",
-       "-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc",
-       "-bsf:v", "hevc_metadata=colour_primaries=9:transfer_characteristics=16:matrix_coefficients=9",
        "-c:a", "aac", str(src))
     info = probe(src)
     assert info.is_hdr, {k: v for k, v in info.video.items() if "color" in k or "pix" in k or "profile" in k}
