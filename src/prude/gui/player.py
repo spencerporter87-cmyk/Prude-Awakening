@@ -4,7 +4,9 @@ On the review screen it can preview the filters live: silencing words, skipping
 cut scenes and blacking out scenes while you watch the original."""
 
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
-from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QLabel, QSizePolicy, QStackedWidget,
+import threading
+
+from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QLabel, QSizePolicy, QSlider, QStackedWidget,
                                QVBoxLayout, QWidget)
 
 from .timeline import Timeline, legend
@@ -20,6 +22,7 @@ except Exception:  # pragma: no cover - QtMultimedia missing
 
 class Player(QWidget):
     loaded = Signal(float)         # duration in seconds, once the file is ready
+    _proxy_done = Signal(int, object, str)
 
     def __init__(self, live_toggle=False, timeline_inside=True, parent=None):
         super().__init__(parent)
@@ -62,6 +65,14 @@ class Player(QWidget):
         bar.addStretch()
         self.status = label("", "Small")
         bar.addWidget(self.status)
+        bar.addWidget(label("🔊", "Muted"))
+        self.volume = QSlider(Qt.Horizontal)
+        self.volume.setRange(0, 100)
+        self.volume.setValue(80)
+        self.volume.setFixedWidth(90)
+        self.volume.setToolTip("Volume")
+        self.volume.valueChanged.connect(self._set_volume)
+        bar.addWidget(self.volume)
         if live_toggle:
             self.live_box = QCheckBox("Preview with filters on")
             self.live_box.setToolTip("Silences the words and skips or blacks out the scenes "
@@ -82,6 +93,13 @@ class Player(QWidget):
             self.audio = QAudioOutput(self)
             self.player.setAudioOutput(self.audio)
             self.player.setVideoOutput(self.video)
+            # The sound comes from a converted copy played alongside (see preview.py)
+            self.aplayer = QMediaPlayer(self)
+            self.aout = QAudioOutput(self)
+            self.aplayer.setAudioOutput(self.aout)
+            self._token, self._proxy_ok = 0, False
+            self._proxy_done.connect(self._proxy_ready)
+            self._set_volume(self.volume.value())
             self.player.positionChanged.connect(self._pos)
             self.player.durationChanged.connect(self._dur)
             self.player.playbackStateChanged.connect(self._state)
@@ -99,16 +117,63 @@ class Player(QWidget):
         self.legend_box.addWidget(legend(mode, action))
 
     # ------------------------------------------------------------ media
-    def load(self, path):
+    def load(self, path, audio_track=0):
         self.status.setText("")
         if HAVE_MM:
+            self._proxy_ok = False
+            self._token += 1
+            self.aplayer.stop()
+            self.aplayer.setSource(QUrl())
+            self.audio.setMuted(False)           # until the converted sound is ready
             self.player.setSource(QUrl.fromLocalFile(str(path)))
             self.player.pause()   # shows the first frame
+            self.status.setText("Preparing the sound for preview…")
+            tok = self._token
+
+            def work():
+                from ..preview import audio_proxy
+                try:
+                    self._proxy_done.emit(tok, str(audio_proxy(path, audio_track)), "")
+                except Exception as e:                    # noqa: BLE001
+                    self._proxy_done.emit(tok, None, str(e))
+            threading.Thread(target=work, daemon=True).start()
+
+    def _proxy_ready(self, tok, proxy, err):
+        if tok != self._token:
+            return
+        if not proxy:
+            self.status.setText("No sound in the preview (use ▶ Play in the list to hear it).")
+            return
+        self.status.setText("")
+        self.aplayer.setSource(QUrl.fromLocalFile(proxy))
+        self.audio.setMuted(True)                # the picture player stays silent
+        self._proxy_ok = True
+        self.aplayer.setPosition(self.player.position())
+        if self.player.playbackState() == QMediaPlayer.PlayingState:
+            self.aplayer.play()
+
+    def snd(self):
+        """The output that carries the sound (and is muted for silenced words)."""
+        return self.aout if getattr(self, "_proxy_ok", False) else self.audio
+
+    def _set_volume(self, v):
+        if HAVE_MM:
+            self.aout.setVolume(v / 100)
+            self.audio.setVolume(v / 100)
+
+    def _move(self, ms):
+        self.player.setPosition(int(ms))
+        if getattr(self, "_proxy_ok", False):
+            self.aplayer.setPosition(int(ms))
 
     def stop(self):
         if HAVE_MM:
+            self._token += 1
+            self._proxy_ok = False
             self.player.stop()
             self.player.setSource(QUrl())
+            self.aplayer.stop()
+            self.aplayer.setSource(QUrl())
         self.tick.stop()
 
     def duration(self):
@@ -128,7 +193,7 @@ class Player(QWidget):
 
     def seek_to(self, t):
         if HAVE_MM:
-            self.player.setPosition(int(max(0.0, t) * 1000))
+            self._move(max(0.0, t) * 1000)
             self.timeline.set_position(t)
 
     def jump(self, d):
@@ -152,7 +217,7 @@ class Player(QWidget):
     def set_live(self, on):
         self.live = bool(on)
         if not on and HAVE_MM:
-            self.audio.setMuted(False)
+            self.snd().setMuted(False)
             self.screen.setCurrentIndex(0)
 
     def _filter_tick(self):
@@ -163,11 +228,13 @@ class Player(QWidget):
             self._stop_at = None
             self.player.pause()
             return
+        if self._proxy_ok and abs(self.aplayer.position() - self.player.position()) > 250:
+            self.aplayer.setPosition(self.player.position())          # keep sound and picture together
         if not self.live:
             return
         for a, b in self.cuts:
             if a <= t < b - 0.05:
-                self.player.setPosition(int(b * 1000) + 20)
+                self._move(int(b * 1000) + 20)
                 self.status.setText(f"✂ Skipped {fmt_time(b - a, False)}")
                 return
         black = any(a <= t < b for a, b in self.blackouts)
@@ -181,8 +248,8 @@ class Player(QWidget):
         elif self.status.text().startswith("◌"):
             self.status.setText("")
         muted = black or any(a <= t < b for a, b in self.mutes)
-        if self.audio.isMuted() != muted:
-            self.audio.setMuted(muted)
+        if self.snd().isMuted() != muted:
+            self.snd().setMuted(muted)
 
     def _pos(self, ms):
         t = ms / 1000
@@ -197,9 +264,15 @@ class Player(QWidget):
     def _state(self, st):
         playing = st == QMediaPlayer.PlayingState
         self.play_btn.setText("❚❚" if playing else "▶")
+        if self._proxy_ok:
+            if playing:
+                self.aplayer.setPosition(self.player.position())
+                self.aplayer.play()
+            else:
+                self.aplayer.pause()
         if playing:
             self.tick.start()
         else:
             self.tick.stop()
             if self.live:
-                self.audio.setMuted(False)
+                self.snd().setMuted(False)

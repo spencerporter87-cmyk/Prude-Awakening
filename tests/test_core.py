@@ -981,3 +981,19 @@ def test_lipsync_not_set_up_is_explained(media_dir, fake_words, tmp_path, monkey
     pipeline.find_word_mutes(p, f)
     res = pipeline.render_project(p, f, Settings(device="cpu"), tmp_path / "nolips.mkv")
     assert any("isn't set up" in w for w in res["warnings"]) and res["replaced_words"] >= 1
+
+
+def test_preview_sound_is_made_once_and_plays_what_the_file_has(media_dir, tmp_path, fake_words):
+    """The player gets a stereo AAC copy of the file's own sound (so Dolby Digital is audible)."""
+    import time
+    from prude import preview
+    f = FilterOptions(words=["mild", "blasphemy", "strong"])
+    p = _project(media_dir / "movie51.mkv", fake_words)
+    pipeline.find_word_mutes(p, f)
+    res = pipeline.render_project(p, f, Settings(device="cpu"), tmp_path / "prev.mkv")
+    a = preview.audio_proxy(res["output"], 0)
+    info = probe(a)
+    assert info.audio[0].codec == "aac" and info.audio[0].channels == 2 and abs(info.duration - 20) < 0.3
+    assert level(a, 5.2) < -60 and level(a, 2.0) > -40        # the silenced word is silent in the preview too
+    t = time.time()
+    assert preview.audio_proxy(res["output"], 0) == a and time.time() - t < 1   # remembered

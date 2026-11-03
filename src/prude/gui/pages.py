@@ -737,7 +737,7 @@ class ReviewPage(QWidget):
         self.show_pics.blockSignals(False)
         self.title.setText(f"Review: {Path(project.source).name}")
         self.player.set_legend("plan", filters.scene_action)
-        self.player.load(project.source)
+        self.player.load(project.source, project.audio_track)
         a = getattr(filters, "advanced", None) or {}
         self.advanced = bool(a.get("enabled")) and a.get("mode") != "mute"
         self.table.setColumnHidden(4, not self.advanced)
