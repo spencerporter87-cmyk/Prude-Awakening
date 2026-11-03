@@ -27,7 +27,7 @@ def main(argv=None):
                         "suggestive,swimwear,violence,gore,scary (or nudity / sexual for the usual set)")
     p.add_argument("--describe", action="append", default=None, help="scene description (repeatable)")
     p.add_argument("--sensitivity", type=int)
-    p.add_argument("--action", choices=["cut", "black", "black_keep", "blur", "mute"])
+    p.add_argument("--action", choices=["cut", "black", "black_keep", "blur", "blur_parts", "mute"])
     p.add_argument("--padding", type=float)
     p.add_argument("--mute-mode", choices=["all", "center"])
     p.add_argument("--audio-track", type=int)
