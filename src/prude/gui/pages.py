@@ -6,14 +6,14 @@ from dataclasses import asdict
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                                QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
                                QInputDialog, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
                                QRadioButton, QScrollArea, QSizePolicy, QSlider, QTableWidget,
                                QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 
-from .. import models
+from .. import confidence, models
 from ..paths import NO_WINDOW, find_tool
 from ..pipeline import STAGES
 from ..scenes import SCENE_GROUPS, SCENE_TYPES
@@ -62,6 +62,7 @@ class HomePage(QWidget):
     browse = Signal()
     openSettings = Signal()
     openBatch = Signal()
+    updateNow = Signal()
 
     def __init__(self):
         super().__init__()
@@ -83,6 +84,18 @@ class HomePage(QWidget):
         top.addWidget(self.batch_btn, 0, Qt.AlignTop)
         top.addWidget(button("⚙  Settings", None, self.openSettings.emit), 0, Qt.AlignTop)
         lay.addLayout(top)
+        self.update_bar = QFrame()
+        self.update_bar.setObjectName("Card")
+        ub = QHBoxLayout(self.update_bar)
+        ub.setContentsMargins(14, 8, 14, 8)
+        self.update_text = label("", None)
+        ub.addWidget(self.update_text, 1)
+        self.update_btn = button("Update now", "Primary", lambda: self.updateNow.emit())
+        ub.addWidget(self.update_btn)
+        self.update_later = button("Later", "Link", lambda: self.update_bar.setVisible(False))
+        ub.addWidget(self.update_later)
+        self.update_bar.setVisible(False)
+        lay.addWidget(self.update_bar)
         self.drop = DropZone()
         self.drop.fileDropped.connect(self.openFile.emit)
         self.drop.filesDropped.connect(self.openFiles.emit)
@@ -566,10 +579,14 @@ class SceneRow(QFrame):
         bits = []
         if scene.get("detail"):
             bits.append(scene["detail"].capitalize())
-        if scene.get("score") is not None and not scene.get("manual"):
-            bits.append(f"{int(float(scene['score']) * 100)}% sure")
+        lvl, why = confidence.scene(scene)
+        self.sure = QLabel(f"● {confidence.NAMES[lvl]}")
+        self.sure.setStyleSheet(f"color:{confidence.COLORS[lvl]}; font-weight:600;")
+        self.sure.setToolTip(why)
+        self.level = lvl
         if bits:
             info.addWidget(label(" · ".join(bits), "Small", wrap=True))
+        info.addWidget(self.sure)
         times = QHBoxLayout()
         self.a, self.b = TimeEdit(scene["start"]), TimeEdit(scene["end"])
         self.a.changed.connect(self._times)
@@ -634,7 +651,8 @@ class ReviewPage(QWidget):
     render = Signal()
     changed = Signal()
 
-    COLS = ["On", "Time", "Words", "What was said", "Says instead (beta)", ""]
+    COLS = ["On", "Time", "How sure", "Words", "What was said", "Says instead (beta)", ""]
+    C_SURE, C_WORDS, C_SAID, C_SAYS, C_BTN = 2, 3, 4, 5, 6
 
     def __init__(self):
         super().__init__()
@@ -659,6 +677,18 @@ class ReviewPage(QWidget):
         main.setSpacing(16)
         self.player = Player(live_toggle=True, timeline_inside=False)
         main.addWidget(self.player, 1)
+        flagrow = QHBoxLayout()
+        from PySide6.QtWidgets import QMenu
+        self.flag_btn = button("⚑  Flag this moment…", None, lambda: None,
+                               tip="Missed something? Pause on it and flag it here.")
+        menu = QMenu(self.flag_btn)
+        menu.addAction("Silence the sound here…", lambda: self._add_mute(self.player.position()))
+        menu.addAction("Remove, black out or blur a scene here…", lambda: self._add_scene(self.player.position()))
+        self.flag_btn.setMenu(menu)
+        flagrow.addWidget(self.flag_btn)
+        flagrow.addWidget(label("Pause the video where something was missed, then flag it.", "Small"))
+        flagrow.addStretch()
+        main.addLayout(flagrow)
         self.tabs = QTabWidget()
         main.addWidget(self.tabs, 1)
         lay.addLayout(main, 1)
@@ -678,6 +708,10 @@ class ReviewPage(QWidget):
         bar = QHBoxLayout()
         bar.addWidget(button("Select all", None, lambda: self._set_all(True)))
         bar.addWidget(button("Select none", None, lambda: self._set_all(False)))
+        bar.addWidget(button("Untick the unsure ones", None, self._untick_unsure))
+        self.only_unsure = QCheckBox("Show only the unsure ones")
+        self.only_unsure.toggled.connect(self._refilter)
+        bar.addWidget(self.only_unsure)
         bar.addStretch()
         bar.addWidget(button("+  Add a mute…", None, self._add_mute))
         wl.addLayout(bar)
@@ -692,10 +726,11 @@ class ReviewPage(QWidget):
         hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(3, QHeaderView.Stretch)
-        hh.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(4, QHeaderView.Stretch)
         hh.setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        self.table.setColumnHidden(4, True)
+        hh.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        self.table.setColumnHidden(self.C_SAYS, True)
         self.table.setWordWrap(False)
         self.table.setTextElideMode(Qt.ElideRight)
         self.table.itemChanged.connect(self._item_changed)
@@ -709,6 +744,10 @@ class ReviewPage(QWidget):
         self.show_pics = QCheckBox("Show pictures unblurred")
         self.show_pics.toggled.connect(self._toggle_blur)
         sbar.addWidget(self.show_pics)
+        self.only_unsure_s = QCheckBox("Show only the unsure ones")
+        self.only_unsure_s.toggled.connect(self._refilter)
+        sbar.addWidget(self.only_unsure_s)
+        sbar.addWidget(button("Untick the unsure ones", None, self._untick_unsure_scenes))
         sbar.addStretch()
         sbar.addWidget(button("+  Add a scene to remove…", None, self._add_scene))
         sl.addLayout(sbar)
@@ -740,9 +779,11 @@ class ReviewPage(QWidget):
         self.player.load(project.source, project.audio_track)
         a = getattr(filters, "advanced", None) or {}
         self.advanced = bool(a.get("enabled")) and a.get("mode") != "mute"
-        self.table.setColumnHidden(4, not self.advanced)
+        self.table.setColumnHidden(self.C_SAYS, not self.advanced)
         self._fill_words()
         self._fill_scenes()
+        self.only_unsure.setChecked(False)
+        self.only_unsure_s.setChecked(False)
         self._update()
         if not project.mutes and project.scenes:
             self.tabs.setCurrentIndex(1)
@@ -782,11 +823,16 @@ class ReviewPage(QWidget):
             icon = "🖼 " if burned else ("💬 " if kind == "sub" else "")
             wi = QTableWidgetItem(icon + m.get("words", ""))
             wi.setToolTip(cat)
-            self.table.setItem(r, 2, wi)
+            self.table.setItem(r, self.C_WORDS, wi)
             ci = QTableWidgetItem(m.get("context", ""))
             ci.setToolTip(f"{cat}\n{m.get('context', '')}")
-            self.table.setItem(r, 3, ci)
-            for c in (1, 2, 3):
+            self.table.setItem(r, self.C_SAID, ci)
+            lvl, why = confidence.for_item(m, "burned" if burned else kind)
+            si = QTableWidgetItem("● " + confidence.NAMES[lvl])
+            si.setForeground(QColor(confidence.COLORS[lvl]))
+            si.setToolTip(why)
+            self.table.setItem(r, self.C_SURE, si)
+            for c in (1, self.C_SURE, self.C_WORDS, self.C_SAID):
                 it = self.table.item(r, c)
                 it.setFlags(it.flags() & ~Qt.ItemIsEditable)
             if kind == "mute" and not m.get("manual") and getattr(self, "advanced", False):
@@ -797,7 +843,7 @@ class ReviewPage(QWidget):
             else:
                 ri = QTableWidgetItem("")
                 ri.setFlags(ri.flags() & ~Qt.ItemIsEditable)
-            self.table.setItem(r, 4, ri)
+            self.table.setItem(r, self.C_SAYS, ri)
             box = QWidget()
             bl = QHBoxLayout(box)
             bl.setContentsMargins(0, 0, 0, 0)
@@ -806,7 +852,8 @@ class ReviewPage(QWidget):
             if getattr(self, "advanced", False) and kind == "mute":
                 bl.addWidget(button("🔊 Hear", "Link", lambda _=False, m=m: self._hear(m),
                                     tip="Hear the replacement word (preview uses the Windows voice)"))
-            self.table.setCellWidget(r, 5, box)
+            self.table.setCellWidget(r, self.C_BTN, box)
+            self.table.setRowHidden(r, self.only_unsure.isChecked() and lvl not in (confidence.LOW,))
         self.table.blockSignals(False)
         self.tabs.setTabText(0, f"Words ({len(self.rows)})")
 
@@ -832,6 +879,26 @@ class ReviewPage(QWidget):
         for row in getattr(self, "scene_rows", []):
             row.set_blur(self.blurred and row.s.get("kind") in INTIMATE)
 
+    def _refilter(self, *_):
+        for r, (kind, m) in enumerate(self.rows):
+            lvl = confidence.for_item(m, "burned" if m.get("kind") == "burned" else kind)[0]
+            self.table.setRowHidden(r, self.only_unsure.isChecked() and lvl != confidence.LOW)
+        for row in getattr(self, "scene_rows", []):
+            row.setVisible(not self.only_unsure_s.isChecked() or row.level == confidence.LOW)
+
+    def _untick_unsure(self):
+        for kind, m in self.rows:
+            if confidence.for_item(m, "burned" if m.get("kind") == "burned" else kind)[0] == confidence.LOW:
+                m["on"] = False
+        self._fill_words()
+        self._update()
+        self.changed.emit()
+
+    def _untick_unsure_scenes(self):
+        for row in getattr(self, "scene_rows", []):
+            if row.level == confidence.LOW:
+                row.chk.setChecked(False)
+
     def _hear(self, m):
         from ..replace import preview, text_for
         text = text_for(m)
@@ -852,7 +919,7 @@ class ReviewPage(QWidget):
             pass
 
     def _item_changed(self, item):
-        if item.column() == 4 and 0 <= item.row() < len(self.rows):
+        if item.column() == self.C_SAYS and 0 <= item.row() < len(self.rows):
             kind, m = self.rows[item.row()]
             if kind == "mute":
                 m["replace_text"] = item.text().strip()
@@ -874,8 +941,9 @@ class ReviewPage(QWidget):
         self._update()
         self.changed.emit()
 
-    def _add_mute(self):
-        d = TimesDialog("Add a mute", 0, 1, parent=self)
+    def _add_mute(self, at=0.0):
+        at = float(at) if not isinstance(at, bool) else 0.0
+        d = TimesDialog("Add a mute", max(0.0, at - 0.2), at + 1.0 if at else 1, parent=self)
         if d.exec():
             a, b = d.a.seconds(), d.b.seconds()
             if b > a:
@@ -888,8 +956,10 @@ class ReviewPage(QWidget):
                 self._update()
                 self.changed.emit()
 
-    def _add_scene(self):
-        d = TimesDialog("Add a scene to remove", 0, 10, with_label=True, parent=self)
+    def _add_scene(self, at=0.0):
+        at = float(at) if not isinstance(at, bool) else 0.0
+        d = TimesDialog("Add a scene to remove", max(0.0, at - 1.0), at + 10.0 if at else 10, with_label=True,
+                        parent=self)
         if d.exec():
             a, b = d.a.seconds(), d.b.seconds()
             if b > a:
@@ -1050,10 +1120,12 @@ class RenderPage(QWidget):
         self.ext_btn = button("Open in my video player", None,
                               lambda: self.output and hasattr(os, "startfile") and os.startfile(self.output))
         self.folder_btn = button("Open folder", None, self._folder)
+        self.compare_btn = button("Compare side by side", None, self._compare)
         self.review_btn = button("Back to review", None, self.backToReview.emit)
         self.again_btn = button("Clean another movie", None, self.again.emit)
         self.btns.addStretch()
-        for b in (self.review_btn, self.again_btn, self.folder_btn, self.ext_btn, self.play_btn, self.cancel_btn):
+        for b in (self.review_btn, self.again_btn, self.folder_btn, self.ext_btn, self.compare_btn, self.play_btn,
+                  self.cancel_btn):
             self.btns.addWidget(b)
         lay.addLayout(self.btns)
         self.output = None
@@ -1087,7 +1159,7 @@ class RenderPage(QWidget):
         self.player.setVisible(False)
         self.spacer.setVisible(True)
         self.bar.setVisible(True)
-        for b in (self.play_btn, self.folder_btn, self.again_btn, self.review_btn, self.ext_btn):
+        for b in (self.play_btn, self.folder_btn, self.again_btn, self.review_btn, self.ext_btn, self.compare_btn):
             b.setVisible(False)
 
     def _tick(self):
@@ -1148,7 +1220,7 @@ class RenderPage(QWidget):
         self.notes.setTextFormat(Qt.RichText)
         self.notes.setText("<br>".join(rows))
         self.cancel_btn.setVisible(False)
-        for b in (self.play_btn, self.folder_btn, self.again_btn, self.review_btn, self.ext_btn):
+        for b in (self.play_btn, self.folder_btn, self.again_btn, self.review_btn, self.ext_btn, self.compare_btn):
             b.setVisible(True)
 
     def show_result(self, result, project, filters, duration):
@@ -1161,6 +1233,23 @@ class RenderPage(QWidget):
         self.spacer.setVisible(False)
         self.bar.setVisible(False)
         self.player.load(self.output)
+        self._ctx = (project, filters, result)
+
+    def _compare(self):
+        if not (self.output and getattr(self, "_ctx", None) and HAVE_MM):
+            QMessageBox.information(self, "Compare", "The side-by-side view isn't available on this computer.")
+            return
+        from ..render import scene_ranges
+        from .compare import CompareDialog
+        project, filters, result = self._ctx
+        cuts = result.get("cut_ranges")
+        if cuts is None:
+            cuts = scene_ranges(project, filters.scene_action)["cut"]
+        edits = [(m["start"], "silenced: " + (m.get("words") or "")) for m in project.active_mutes()]
+        edits += [(s["start"], s.get("label", "scene")) for s in project.active_scenes()]
+        self.player.player.pause()
+        CompareDialog(project.source, self.output, cuts, edits, project.audio_track,
+                      result.get("original_duration", 0), self).exec()
 
     def leave(self):
         self.player.stop()

@@ -74,6 +74,9 @@ class SettingsDialog(QDialog):
         self.quality.setCurrentIndex(max(0, self.quality.findData(settings.video_quality)))
         form.addRow("Video quality when re-encoding", self.quality)
 
+        self.updates = QCheckBox("Check for new versions when the app starts (only contacts GitHub)")
+        self.updates.setChecked(settings.check_updates)
+        form.addRow("", self.updates)
         self.keep_subs = QCheckBox("Keep the movie's subtitles (bad words become ****)")
         self.keep_subs.setChecked(settings.keep_subtitles)
         self.make_subs = QCheckBox("Add subtitles written from the dialogue")
@@ -173,6 +176,7 @@ class SettingsDialog(QDialog):
         s.keep_subtitles = self.keep_subs.isChecked()
         s.make_subtitles = self.make_subs.isChecked()
         s.blur_thumbnails = self.blur.isChecked()
+        s.check_updates = self.updates.isChecked()
         s.elevenlabs_key = self.eleven.text().strip()
         s.musetalk_dir = self.mt_dir.text().strip()
         s.musetalk_python = self.mt_py.text().strip()

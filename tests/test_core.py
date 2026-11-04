@@ -997,3 +997,72 @@ def test_preview_sound_is_made_once_and_plays_what_the_file_has(media_dir, tmp_p
     assert level(a, 5.2) < -60 and level(a, 2.0) > -40        # the silenced word is silent in the preview too
     t = time.time()
     assert preview.audio_proxy(res["output"], 0) == a and time.time() - t < 1   # remembered
+
+
+# ---------------------------------------------------------------- confidence, updates (3.1)
+def test_word_confidence_from_how_clearly_it_was_heard():
+    from prude import confidence as c
+    words = [{"w": "Well", "s": 0, "e": .3, "p": .9}, {"w": " shit", "s": 1, "e": 1.3, "p": 0.35},
+             {"w": " damn", "s": 2, "e": 2.3, "p": 0.95}, {"w": " hell", "s": 3, "e": 3.3, "p": 0.62}]
+    hits = merge_intervals(find_matches(words, build_patterns(["mild", "strong"])))
+    levels = {h["words"]: c.word(h)[0] for h in hits}
+    assert levels == {"shit": c.LOW, "damn": c.HIGH, "hell": c.MEDIUM}
+    assert c.word({"manual": True})[0] == c.MINE
+    assert c.word({"origin": "subtitle-check", "unsure": True})[0] == c.LOW
+    assert c.word({"origin": "subtitles"})[0] == c.HIGH
+
+
+def test_scene_confidence_from_margin_over_threshold():
+    from prude import confidence as c
+    assert c.scene({"score": 0.9, "threshold": 0.45})[0] == c.HIGH
+    assert c.scene({"score": 0.6, "threshold": 0.45})[0] == c.MEDIUM
+    assert c.scene({"score": 0.47, "threshold": 0.45})[0] == c.LOW
+    assert c.scene({"score": 0.47})[0] == c.MEDIUM            # older scans without a threshold
+    assert c.scene({"manual": True})[0] == c.MINE
+
+
+def test_scan_stores_confidence(media_dir, fake_words):
+    p = _project(media_dir / "movie51.mkv", fake_words)
+    pipeline.scan(p, FilterOptions(words=["mild", "blasphemy", "strong"]), Settings(device="cpu"))
+    assert all("conf_p" in m for m in p.mutes if not m.get("origin") == "subtitle-check")
+
+
+def test_update_check_and_download(tmp_path, monkeypatch):
+    import hashlib
+    from prude import updater
+    blob = b"installer-bytes" * 1000
+
+    class R:
+        def __init__(self, status=200, js=None, body=b""):
+            self.status_code, self._js, self.body = status, js, body
+            self.headers = {"Content-Length": str(len(body))}
+
+        def json(self):
+            return self._js
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, n):
+            for i in range(0, len(self.body), n):
+                yield self.body[i:i + n]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+    release = {"assets": [{"name": "Prude-Awakening-Setup-3.2.0.exe", "browser_download_url": "http://x/y.exe",
+                           "size": len(blob), "digest": "sha256:" + hashlib.sha256(blob).hexdigest()}]}
+    info = updater.check("3.1.0", get=lambda *a, **k: R(200, release))
+    assert info and info["version"] == "3.2.0" and info["sha256"]
+    assert updater.check("3.2.0", get=lambda *a, **k: R(200, release)) is None       # already current
+    assert updater.check("3.10.0", get=lambda *a, **k: R(200, release)) is None      # 3.10 > 3.2
+    assert updater.check("3.1.0", get=lambda *a, **k: R(404)) is None
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    path = updater.download(info, get=lambda *a, **k: R(200, None, blob))
+    assert Path(path).read_bytes() == blob
+    bad = dict(info, sha256="0" * 64)
+    with pytest.raises(RuntimeError):
+        updater.download(bad, get=lambda *a, **k: R(200, None, blob))
+    assert not list(tmp_path.rglob("*.part"))                  # a bad download is never kept

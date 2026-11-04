@@ -46,3 +46,4 @@ Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\video\shell\PrudeAw
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Open {#AppName} now"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExe}"; Flags: nowait; Check: WizardSilent

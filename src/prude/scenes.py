@@ -456,9 +456,10 @@ def watch(info, work_dir: Path, models_dir, filters, progress=None, cancel=None,
         idx = [NUDE_CLASS_ORDER.index(c) for c in cls_names]
         return cache["nude_cls"][:, idx].max(axis=1)
 
-    def add(kind, group, label, a, b, peak, idx, detail=""):
+    def add(kind, group, label, a, b, peak, idx, detail="", thr=None):
         scenes.append({"kind": kind, "group": group, "label": label, "detail": detail,
                        "start": a, "end": b, "score": round(float(peak), 2),
+                       "threshold": None if thr is None else round(float(thr), 2),
                        "frame": str(frames[idx]), "action": act_of(group)})
 
     # ---- nudity, body part by body part
@@ -471,7 +472,7 @@ def watch(info, work_dir: Path, models_dir, filters, progress=None, cancel=None,
             found = [t for t in nude_types if win and float(per_type[t][win].max()) >= thr]
             names = [NUDE_SHORT[t] for t in found] or ["nudity"]
             label = "Shirtless man" if found == ["nude_m_chest"] else "Nudity"
-            add("nudity", "nudity", label, a, b, peak, idx, ", ".join(names))
+            add("nudity", "nudity", label, a, b, peak, idx, ", ".join(names), thr)
 
     # ---- scene descriptions (CLIP)
     probs = {}
@@ -496,11 +497,11 @@ def watch(info, work_dir: Path, models_dir, filters, progress=None, cancel=None,
                 if kind not in sex_types:
                     continue
                 add(kind, "sexual", "Sex scene" + (" with nudity" if nude else " (no nudity shown)"),
-                    a, b, peak, idx)
+                    a, b, peak, idx, thr=thr)
             elif key.startswith("custom:"):
-                add(key, "custom", "“" + key.split(":", 1)[1] + "”", a, b, peak, idx)
+                add(key, "custom", "“" + key.split(":", 1)[1] + "”", a, b, peak, idx, thr=thr)
             else:
-                add(key, TYPE_GROUP.get(key, group), TYPE_NAME.get(key, key), a, b, peak, idx)
+                add(key, TYPE_GROUP.get(key, group), TYPE_NAME.get(key, key), a, b, peak, idx, thr=thr)
 
     # ---- a nudity flag inside a sex scene becomes part of that scene
     sexes = [x for x in scenes if x["kind"] in ("sex_nude", "sex_implied")]

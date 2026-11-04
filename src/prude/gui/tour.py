@@ -152,6 +152,15 @@ def run_tour(app, out_dir: Path, video=None):
             w.project, w._filters, w.info.duration), 2500)
         add(lambda: w.renderp.player.seek_to(6.0), 1200)
         add(lambda: shot("7-done"))
+
+        def compare():
+            from .compare import CompareDialog
+            d = CompareDialog(str(video), str(video), [[10.0, 14.5]], [(5.0, "silenced: hell")], 0, 30.0, w)
+            w._compare_dlg = d
+            d.show()
+        add(compare, 3500)
+        add(lambda: w._compare_dlg.seek(12.0), 1500)
+        add(lambda: (w._compare_dlg.grab().save(str(Path(out_dir) / "7b-compare.png")), w._compare_dlg.close()))
         add(lambda: w.renderp.leave())
 
     def batch_shot():

@@ -113,7 +113,8 @@ def find_matches(words, patterns, pad_before=0.15, pad_after=0.15, allow_text=""
         first, last = toks[a][1], toks[b - 1][1]
         hits.append({"start": max(0.0, first["s"] - pad_before), "end": last["e"] + pad_after,
                      "words": " ".join(t[1]["w"].strip() for t in toks[a:b]),
-                     "category": p.category, "rule": p.label, "_i": a})
+                     "category": p.category, "rule": p.label, "_i": a,
+                     "conf_p": min(float(t[1].get("p", 1.0)) for t in toks[a:b])})
         matched.update(range(a, b))
     for i, (n, w) in enumerate(toks):  # Whisper sometimes writes "f***" itself
         if i not in matched and "*" in w["w"]:
@@ -136,6 +137,8 @@ def merge_intervals(items, gap=0.25):
             last["end"] = max(last["end"], m["end"])
             if m["words"] not in last["words"]:
                 last["words"] += " / " + m["words"]
+            if "conf_p" in m:
+                last["conf_p"] = min(last.get("conf_p", 1.0), m["conf_p"])
         else:
             merged.append(dict(m))
     return merged

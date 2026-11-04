@@ -66,6 +66,8 @@ class Settings:
     make_subtitles: bool = True
     blur_thumbnails: bool = True
     gpu_pack_declined: bool = False
+    check_updates: bool = True
+    last_update_check: float = 0.0
     elevenlabs_key: str = ""                   # Advanced Editing (beta); stays on this PC
     musetalk_dir: str = ""                     # Advanced Editing (beta): a MuseTalk install you made
     musetalk_python: str = ""

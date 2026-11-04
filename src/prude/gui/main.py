@@ -2,11 +2,12 @@
 
 import json
 import logging
+import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (QApplication, QFileDialog, QMainWindow, QMessageBox, QStackedWidget)
 
 from .. import APP_NAME, __version__, models
@@ -36,6 +37,8 @@ def setup_logging():
 
 
 class MainWindow(QMainWindow):
+    _found = Signal(object)
+
     def __init__(self, settings: Settings):
         super().__init__()
         self.settings = settings
@@ -88,6 +91,65 @@ class MainWindow(QMainWindow):
         self.renderp.again.connect(lambda: (self.renderp.leave(), self.go_home()))
         self.renderp.backToReview.connect(self._back_to_review)
         self.setAcceptDrops(True)
+        self.home.updateNow.connect(self.install_update)
+        self._update_info = None
+        self._found.connect(self._update_found)
+        QTimer.singleShot(2500, self.check_for_update)
+
+    # ------------------------------------------------------------ updates
+    def check_for_update(self):
+        import threading
+        import time
+        s = self.settings
+        if not s.check_updates or time.time() - s.last_update_check < 6 * 3600 or \
+                os.environ.get("PRUDE_NO_UPDATE_CHECK"):
+            return
+        s.last_update_check = time.time()
+        s.save()
+
+        def work():
+            from .. import updater
+            info = updater.check()
+            if info:
+                self._found.emit(info)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _update_found(self, info):
+        self._update_info = info
+        self.home.update_text.setText(f"<b>Version {info['version']} is available.</b> "
+                                      f"You have {__version__}.")
+        self.home.update_btn.setEnabled(True)
+        self.home.update_bar.setVisible(True)
+
+    def install_update(self):
+        if self.busy() or not self._update_info:
+            return
+        from .. import updater
+        self.home.update_btn.setEnabled(False)
+        self.home.update_later.setVisible(False)
+        self.worker = Worker(updater.download, self._update_info)
+        self.worker.progress.connect(lambda _s, f, m: self.home.update_text.setText(m))
+        self.worker.finished_ok.connect(self._update_downloaded)
+        self.worker.failed.connect(self._update_failed)
+        self.worker.cancelled.connect(lambda: None)
+        self.worker.start()
+
+    def _update_downloaded(self, path):
+        self.worker = None
+        try:
+            from .. import updater
+            updater.run_installer(path)
+        except Exception as e:                              # noqa: BLE001
+            self._update_failed(str(e), "")
+            return
+        QApplication.quit()
+
+    def _update_failed(self, msg, details):
+        self.worker = None
+        log.error("Update failed: %s\n%s", msg, details)
+        self.home.update_text.setText(f"The update didn't work: {msg}")
+        self.home.update_btn.setEnabled(True)
+        self.home.update_later.setVisible(True)
 
     # ------------------------------------------------------------ helpers
     def gpu_present(self):
@@ -491,6 +553,8 @@ def main(argv=None):
     app.setApplicationName(APP_NAME)
     app.setWindowIcon(app_icon())
     app.setStyleSheet(QSS)
+    if "--tour" in argv or "--self-test" in argv:
+        os.environ["PRUDE_NO_UPDATE_CHECK"] = "1"
     if "--tour" in argv:
         from .tour import run_tour
         i = argv.index("--tour")

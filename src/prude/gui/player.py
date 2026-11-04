@@ -79,7 +79,9 @@ class Player(QWidget):
                                      "you've ticked, while you watch.")
             self.live_box.toggled.connect(self.set_live)
             bar.addWidget(self.live_box)
-        lay.addLayout(bar)
+        self.bar_widget = QWidget()
+        self.bar_widget.setLayout(bar)
+        lay.addWidget(self.bar_widget)
 
         self.timeline = Timeline()
         self.timeline.seek.connect(self.seek_to)
@@ -108,6 +110,10 @@ class Player(QWidget):
         self.tick = QTimer(self)
         self.tick.setInterval(40)
         self.tick.timeout.connect(self._filter_tick)
+
+    def set_compact(self, on=True):
+        """Picture only (used by the side-by-side window, which has its own controls)."""
+        self.bar_widget.setVisible(not on)
 
     def set_legend(self, mode, action="cut"):
         while self.legend_box.count():
