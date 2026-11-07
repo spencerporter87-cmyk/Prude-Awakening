@@ -210,6 +210,11 @@ def scene_ranges(project, default_action, duration=0.0, blur_margin=0.0):
     return {a: merge_ranges(clamp_ranges(r, duration)) for a, r in out.items()}
 
 
+def paint_in_use(project):
+    from . import paint
+    return bool(paint.active(getattr(project, "paint", None)))
+
+
 def build_video_chain(blackouts, cuts, blurs=(), src="[0:v:0]", scale_h=None):
     if not blackouts and not cuts and not blurs and not scale_h:
         return [f"{src}null[vout]"] if src != "[0:v:0]" else []
@@ -342,7 +347,7 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
     # ---- fast cuts: copy the picture between cuts instead of re-encoding it
     fast_list, fast_note, fast_work = None, "", None
     if (export is not None and getattr(export, "fast_cuts", False) and cuts and not
-            (blackouts or blurs or parts or burned or scale_h)):
+            (blackouts or blurs or parts or burned or scale_h or paint_in_use(project))):
         from . import smartcut
         pl = smartcut.plan(info, cuts)
         if pl:
@@ -461,6 +466,17 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
             pgraph, vsrc = blurparts.filter_parts(info, found, cmd_name, _between(
                 [(a - 0.3, b + 0.3) for a, b in found]))
         shutil.rmtree(out.parent / f".{out.stem}.prude-blur", ignore_errors=True)
+    # ---- hand-painted blurs: a mask clip per stretch of time, made from your strokes
+    paint_segs = []
+    if info.video:
+        from . import paint
+        if paint.active(getattr(project, "paint", None)):
+            pwork = out.parent / f".{out.stem}.prude-paint"
+            tmp_dirs.append(pwork)
+            paint_segs = paint.write_masks(project.paint, info, pwork,
+                                           (lambda f, m: progress(0.03 * f, m)) if progress else None, cancel)
+            if paint_segs:
+                notes.append(f"Blurred {len(paint.active(project.paint))} area(s) you painted.")
     # ---- words in subtitles burned into the picture: blur their spot while they show
     if burned and info.video:
         from . import burnin
@@ -483,6 +499,10 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
                      + (f", {len(failed)} left silent because the voice failed" if failed else "") + ".")
     base = 1 + len(subs) + (1 if fast_list else 0)
     inserts = [(base + n, c["start"]) for n, c in enumerate(clips)]
+    if paint_segs:
+        from . import paint
+        painted, vsrc = paint.filter_graph(info, paint_segs, base + len(clips), vsrc)
+        pgraph = pgraph + painted
     graph = build_audio_chain(info, track, mutes, merge_ranges(silent_blacks + mute_scenes), cuts,
                               filters.mute_mode, fade=getattr(filters, "mute_fade", False), inserts=inserts)
     # ---- other audio tracks (other languages, commentary): kept as they are, NOT filtered
@@ -514,6 +534,8 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
         cmd += ["-f", "concat", "-safe", "0", "-i", str(fast_list)]
     for c in clips:
         cmd += ["-i", c["wav"]]
+    for sg in paint_segs:
+        cmd += ["-i", sg["path"]]
     if len(graph_text) > 20000:
         script = out.with_name(f"{out.stem}.prude-filter.txt")
         script.write_text(graph_text, encoding="utf-8")

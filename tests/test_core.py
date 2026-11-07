@@ -1337,3 +1337,137 @@ def test_blur_covers_the_edges_and_blinks(media_dir, fake_words, tmp_path, monke
     for t, blurred in ((3.7, True), (5.15, True), (8.2, True), (2.5, False), (9.6, False)):
         o, c = frame(src, t), frame(out, t)
         assert (sharp(c[inside]) < 0.3 * sharp(o[inside])) == blurred, t
+
+
+# ---------------------------------------------------------------- hand-painted blur
+def test_paint_shape_follows_keyframes_and_edits():
+    from prude import paint
+    p = paint.new_patch(2.0, 4.0)
+    paint.add_stroke(p, 2.0, [(0.30, 0.40), (0.34, 0.40)], 0.03)
+    assert p["anchor"] == [0.30, 0.40] and p["start"] == 2.0
+    (r, pts), = paint.shape_at(p, 2.0)
+    assert r == pytest.approx(0.03) and pts[0] == pytest.approx((0.30, 0.40))
+    paint.move_at(p, 4.0, 0.2, 0.1)                       # slide it at 4 s; it glides there from the start
+    assert paint.transform(p, 3.0) == pytest.approx((0.1, 0.05, 1.0))
+    (r, pts), = paint.shape_at(p, 4.0)
+    assert pts[0] == pytest.approx((0.50, 0.50))
+    paint.scale_at(p, 4.0, 2.0, (0.5, 0.5))               # grow around the point that stays put
+    (r, pts), = paint.shape_at(p, 4.0)
+    assert r == pytest.approx(0.06) and pts[0] == pytest.approx((0.50, 0.50))
+    # strokes added later land where you drew them, whatever the shape's own offset
+    paint.add_stroke(p, 3.0, [(0.85, 0.85)], 0.03)
+    assert paint.shape_at(p, 3.0)[1][1][0] == pytest.approx((0.85, 0.85))
+    assert paint.erase_near(p, 3.0, 0.85, 0.85, 0.01, 1.0) == 1 and len(p["strokes"]) == 1
+    q = paint.shifted(p, 1.0)
+    assert q["start"] == 1.0 and q["keys"][-1]["t"] == pytest.approx(3.0) and p["keys"][-1]["t"] == 4.0
+    assert paint.span(dict(p, pad_before=0.5, pad_after=0.25)) == (1.5, 4.25)
+
+
+def test_paint_mask_only_inside_the_shape_and_time(tmp_path):
+    from prude import paint
+    p = paint.new_patch(1.0, 2.0)
+    paint.add_stroke(p, 1.0, [(0.25, 0.5), (0.35, 0.5)], 0.05)
+    m = paint.mask_at([p], 1.5, 200, 100)
+    assert m[50, 60] > 200 and m[5, 5] == 0 and m[50, 150] == 0
+    assert not paint.mask_at([p], 3.0, 200, 100).any()                         # not at that moment
+    assert not paint.mask_at([dict(p, on=True)], 0.5, 200, 100).any()
+
+
+def test_painted_blur_hits_the_exact_frames(media_dir, fake_words, tmp_path):
+    import cv2
+    from prude import paint
+    src = media_dir / "movie51.mkv"
+    info = probe(src)
+    fps = info.fps
+    f = FilterOptions(words=[], scenes=[])
+    p = _project(src, fake_words)
+    patch = paint.new_patch(5.0, 6.0)
+    paint.add_stroke(patch, 5.0, [(0.10, 0.25), (0.22, 0.25)], 0.06)       # over the textured top-left area
+    p.paint = [patch]
+    out = tmp_path / "painted.mkv"
+    res = pipeline.render_project(p, f, Settings(device="cpu"), out)
+    assert res["valid"], res["problems"]
+    assert probe(out).duration == pytest.approx(info.duration, abs=0.2)
+
+    def frame(path, n):
+        cap = cv2.VideoCapture(str(path))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, n)
+        ok, img = cap.read()
+        assert ok
+        return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(float)
+
+    H, W = frame(src, 0).shape
+    inside = (slice(int(H * 0.2), int(H * 0.3)), slice(int(W * 0.12), int(W * 0.20)))
+    sharp = lambda img: cv2.Laplacian(img, cv2.CV_64F).var()       # noqa: E731
+    first, last = int(round(5.0 * fps)), int(round(6.0 * fps))
+    # the first painted frame and the last are blurred; the frames either side are untouched
+    for n, blurred in ((0, False), (first - 1, False), (first, True), (first + 1, True), (last - 2, True),
+                       (last - 1, True), (last, False), (last + 1, False)):
+        o, c = frame(src, n), frame(out, n)
+        assert (sharp(c[inside]) < 0.35 * sharp(o[inside])) == blurred, n
+        assert sharp(c[: int(H * 0.1)]) == pytest.approx(sharp(o[: int(H * 0.1)]), rel=0.15), n   # elsewhere untouched
+
+
+def test_painted_blur_shows_in_the_edited_preview(media_dir, fake_words):
+    import cv2
+    from prude import paint
+    from prude.preview import edited_clip
+    p = _project(media_dir / "movie51.mkv", fake_words)
+    f = FilterOptions(words=[], scene_action="cut")
+    patch = paint.new_patch(10.0, 12.0)
+    paint.add_stroke(patch, 10.0, [(0.10, 0.25), (0.22, 0.25)], 0.06)
+    p.paint = [patch]
+    out = edited_clip(p, f, Settings(device="cpu"), 10.0, 12.0, pad=2.0)
+    assert out["valid"], out["problems"]
+    assert "painted blur" in out["summary"]
+
+    def sharp_at(path, t):
+        cap = cv2.VideoCapture(str(path))
+        cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
+        ok, img = cap.read()
+        assert ok
+        g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(float)
+        H, W = g.shape
+        return cv2.Laplacian(g[int(H * 0.2):int(H * 0.3), int(W * 0.12):int(W * 0.20)], cv2.CV_64F).var()
+
+    t = 11.0 - out["start"]
+    assert sharp_at(out["edited"], t) < 0.35 * sharp_at(out["original"], t)
+    assert sharp_at(out["edited"], 0.3) > 0.7 * sharp_at(out["original"], 0.3)       # before the painted blur
+
+
+def test_paint_preview_frame_blurs_only_the_painted_spot(tmp_path):
+    import cv2
+    import numpy as np
+    from prude import paint
+    rng = np.random.default_rng(1)
+    img = rng.integers(0, 255, (120, 200, 3), dtype=np.uint8)
+    path = tmp_path / "f.jpg"
+    cv2.imwrite(str(path), img, [cv2.IMWRITE_JPEG_QUALITY, 98])
+    p = paint.new_patch(1.0, 2.0)
+    paint.add_stroke(p, 1.0, [(0.30, 0.5), (0.45, 0.5)], 0.08)
+    plain = paint.preview_frame(path, p, 3.0)                       # outside the time span: untouched
+    done = paint.preview_frame(path, p, 1.5, cache={})
+    sharp = lambda a: cv2.Laplacian(cv2.cvtColor(a, cv2.COLOR_RGB2GRAY), cv2.CV_64F).var()   # noqa: E731
+    assert sharp(done[50:70, 70:90]) < 0.2 * sharp(plain[50:70, 70:90])
+    assert (done[:20] == plain[:20]).all()
+    paint.include_frame(p, 5.0, 24.0)
+    assert p["end"] == pytest.approx(5.0 + 1 / 24)
+
+
+def test_paint_mask_moves_with_the_shape_and_clips_cover_every_frame(media_dir, tmp_path):
+    import numpy as np
+    from prude import paint
+    info = probe(media_dir / "movie51.mkv")
+    fps = info.fps
+    p = paint.new_patch(4.6, 7.0)                          # not on frame boundaries
+    paint.add_stroke(p, 4.6, [(0.2, 0.5)], 0.05)
+    paint.move_at(p, 6.9, 0.5, 0.0)                        # slides right across the picture
+    left = paint.mask_at([p], 4.7, 200, 100)
+    right = paint.mask_at([p], 6.9, 200, 100)
+    assert left[50, 40] > 200 and left[50, 140] == 0 and right[50, 140] > 200 and right[50, 40] == 0
+    segs = paint.write_masks([p], info, tmp_path / "m")
+    assert len(segs) == 1
+    s = segs[0]
+    assert s["start_frame"] == int(np.ceil(4.6 * fps - 1e-3 * fps))
+    last_blurred = int(np.ceil(7.0 * fps - 1e-3 * fps)) - 1
+    assert s["start_frame"] + s["frames"] - 3 == last_blurred          # every frame up to the end, plus two spare empty ones

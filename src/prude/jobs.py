@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .media import VIDEO_EXTS, Cancelled, pick_audio_track, probe
 from .paths import app_data_dir
+from .render import paint_in_use
 
 QUEUED, RUNNING, REVIEW, DONE, FAILED, CANCELLED = (
     "queued", "running", "needs_review", "done", "failed", "cancelled")
@@ -191,7 +192,7 @@ def process_job(job, settings, progress=None, cancel=None, log=print):
     found = {"mutes": len(project.mutes), "scenes": len(project.scenes), "subtitle_words": len(subs_on)}
     if review_only:
         return dict(found, review=True)
-    if not project.active_mutes() and not project.active_scenes() and not subs_on:
+    if not project.active_mutes() and not project.active_scenes() and not subs_on and not paint_in_use(project):
         return dict(found, skipped="Nothing to change - no copy was made.")
     result = render_project(project, f, settings, progress=stage_progress, cancel=cancel, log=log,
                             export=ExportOptions.from_dict(job.export))

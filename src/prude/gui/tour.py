@@ -106,6 +106,12 @@ def run_tour(app, out_dir: Path, video=None):
                  "on": False, "action": "black_keep"},
                 {"id": "s", "kind": "swimwear", "label": "Swimsuits and bikinis", "start": 22.0, "end": 26.0,
                  "score": 0.6, "thumb": thumbs[1], "thumb_blur": thumbs[1], "on": True, "action": "black_keep"}]
+            from .. import paint
+            demo = paint.new_patch(9.0, 10.0, "Painted blur (demo)")
+            paint.add_stroke(demo, 9.0, [(0.30, 0.45), (0.40, 0.50), (0.46, 0.52)], 0.05)
+            paint.move_at(demo, 9.9, 0.08, -0.04)
+            paint.include_frame(demo, 9.9, 24.0)
+            p.paint = [demo]
             w._filters = w.setup.filters()
             w.review.set_project(p, w.info, w.settings, w._filters)
             w.stack.setCurrentWidget(w.review)
@@ -129,6 +135,16 @@ def run_tour(app, out_dir: Path, video=None):
                      (out_dir / "edited-preview.json").write_text(__import__("json").dumps(
                          {"ok": bool(w.review._edited.res), "summary": (w.review._edited.res or {}).get("summary"),
                           "note": w.review._edited.note.text()})), w.review._edited.close()))
+
+        def paint_open():
+            from .paint_editor import PaintEditor
+            w._paint_ed = PaintEditor(w.review.project, w.info, 9.4, w.review.project.paint[0], w)
+            w._paint_ed.show()
+        add(paint_open, 12000)
+        add(lambda: (w._paint_ed.grab().save(str(Path(out_dir) / "5c-paint-editor.png")),
+                     (out_dir / "paint-editor.json").write_text(__import__("json").dumps(
+                         {"frames": len(w._paint_ed.frames), "status": w._paint_ed.status.text(),
+                          "time": w._paint_ed.time_lab.text()})), w._paint_ed.close()))
 
         def export_shot():
             from ..export import ExportOptions

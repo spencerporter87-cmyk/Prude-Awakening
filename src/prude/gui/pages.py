@@ -699,6 +699,32 @@ class SceneRow(QFrame):
         self.on_change()
 
 
+class PaintRow(QFrame):
+    """One painted blur in the Scenes list: tick it, change it, preview it, delete it."""
+
+    def __init__(self, patch, on_change, on_edit, on_see, on_delete):
+        super().__init__()
+        from .. import paint
+        self.patch = patch
+        self.setObjectName("Card")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 8, 12, 8)
+        lay.setSpacing(10)
+        chk = QCheckBox()
+        chk.setChecked(patch.get("on", True))
+        chk.toggled.connect(lambda v: (patch.__setitem__("on", bool(v)), on_change()))
+        lay.addWidget(chk)
+        a, b = paint.span(patch)
+        lay.addWidget(label(f"🖌  {patch.get('label') or 'Painted blur'}", "H2"))
+        lay.addWidget(label(f"{fmt_time(a)} – {fmt_time(b)}  ·  {len(patch.get('keys') or [])} key frame(s)", "Small"))
+        lay.addStretch()
+        lay.addWidget(button("✎ Edit", None, lambda: on_edit(patch), tip="Open it in the paint window"))
+        lay.addWidget(button("🎬 Edited", "Link", lambda: on_see(
+            {"start": a, "end": b, "label": patch.get("label") or "Painted blur"}),
+            tip="See and hear the real result around this blur"))
+        lay.addWidget(button("🗑 Delete", "Link", lambda: on_delete(patch)))
+
+
 class ReviewPage(QWidget):
     back = Signal()
     render = Signal()
@@ -743,6 +769,9 @@ class ReviewPage(QWidget):
         self.edited_btn = button("🎬  See it edited", "Primary", lambda: self._see_edited(),
                                  tip="Makes a short clip around the spot you're on, with your filters really applied")
         ed_row.addWidget(self.edited_btn)
+        self.paint_btn = button("🖌  Paint a blur", None, lambda: self._paint(),
+                                tip="Step through frames and paint over anything the filters missed or covered late")
+        ed_row.addWidget(self.paint_btn)
         ed_row.addWidget(label("Shows the real result near the playhead (or the closest edit): the actual blur, "
                                "black screen and silence, with a switch back to the original.", "Small", wrap=True), 1)
         self.player.layout().insertLayout(2, ed_row)
@@ -806,6 +835,8 @@ class ReviewPage(QWidget):
         sbar.addWidget(self.only_unsure_s)
         sbar.addWidget(button("Untick the unsure ones", None, self._untick_unsure_scenes))
         sbar.addStretch()
+        sbar.addWidget(button("🖌  Paint a blur…", None, lambda: self._paint(),
+                              tip="Paint over exactly what should be blurred, frame by frame"))
         sbar.addWidget(button("+  Add a scene to remove…", None, self._add_scene))
         sl.addLayout(sbar)
         self.scene_scroll = QScrollArea()
@@ -922,6 +953,13 @@ class ReviewPage(QWidget):
             if it.widget():
                 it.widget().deleteLater()
         self.scene_rows = []
+        painted = list(getattr(self.project, "paint", None) or [])
+        if painted:
+            self.scene_list.addWidget(label(f"Painted blurs ({len(painted)})", "H2"))
+            for pt in painted:
+                self.scene_list.addWidget(PaintRow(pt, self._painted_changed, self._paint, self._see_edited,
+                                                   self._paint_delete))
+            self.scene_list.addWidget(label("Scenes", "H2"))
         if not self.project.scenes:
             self.scene_list.addWidget(label(
                 "No scenes to remove. (Turn on scene options in settings to look for some.)", "Muted"))
@@ -1031,6 +1069,37 @@ class ReviewPage(QWidget):
                 self._update()
                 self.changed.emit()
 
+    def _paint(self, patch=None):
+        if self.info is None or not self.info.video:
+            QMessageBox.information(self, "Paint a blur", "This file has no picture to paint on.")
+            return
+        patch = patch if isinstance(patch, dict) else None
+        at = float(patch["start"]) if patch else self.player.position()
+        self.player.player.pause()
+        from .paint_editor import PaintEditor
+        d = PaintEditor(self.project, self.info, at, patch, self)
+        if d.exec() and d.result:
+            lst = self.project.paint
+            for i, x in enumerate(lst):
+                if x.get("id") == d.result.get("id"):
+                    lst[i] = d.result
+                    break
+            else:
+                lst.append(d.result)
+            lst.sort(key=lambda x: x["start"])
+            self._painted_changed()
+
+    def _painted_changed(self):
+        self._fill_scenes()
+        self._update()
+        self.changed.emit()
+
+    def _paint_delete(self, patch):
+        if QMessageBox.question(self, "Delete painted blur", f"Delete “{patch.get('label') or 'Painted blur'}”?") \
+                == QMessageBox.Yes:
+            self.project.paint = [x for x in self.project.paint if x.get("id") != patch.get("id")]
+            self._painted_changed()
+
     def _see_edited(self, item=None):
         from ..preview import nearest_edit
         if not HAVE_MM:
@@ -1080,7 +1149,12 @@ class ReviewPage(QWidget):
         mutes = merge_ranges([(m["start"], m["end"]) for m in p.mutes if m.get("on", True)] + r["mute"])
         self.player.set_filters(mutes, r["cut"], r["black"], r["blur"], r["black_keep"], r["blur_parts"])
         dur = self.info.duration if self.info else max([1.0] + [x["end"] for x in p.mutes + p.scenes])
-        self.player.timeline.set_plan(dur, p.mutes, p.scenes, self.filters.scene_action)
+        from .. import paint
+        drawn = [{"start": a, "end": b, "on": x.get("on", True), "action": "blur_parts", "kind": "manual",
+                  "label": x.get("label") or "Painted blur"}
+                 for x in (getattr(p, "paint", None) or []) if x.get("strokes")
+                 for a, b in [paint.span(x)]]
+        self.player.timeline.set_plan(dur, p.mutes, p.scenes + drawn, self.filters.scene_action)
 
     def _update(self):
         self._refresh_timeline()
@@ -1101,13 +1175,17 @@ class ReviewPage(QWidget):
                      "blur": "blurred", "blur_parts": "private parts blurred", "mute": "silenced"}
             what = ", ".join(f"{n} {names[a]}" for a, n in by.items()) or "none changed"
             parts.append(f"{len(scenes)} of {len(self.project.scenes)} scenes ({what})")
-        if any((s.get("action") or self.filters.scene_action) != "mute" for s in scenes) or \
+        from .. import paint
+        painted = paint.active(getattr(self.project, "paint", None))
+        if painted:
+            parts.append(f"{len(painted)} painted blur{'s' if len(painted) != 1 else ''}")
+        if painted or any((s.get("action") or self.filters.scene_action) != "mute" for s in scenes) or \
                 any(x.get("on", True) for x in getattr(self.project, "burned_edits", [])):
             parts.append("video will be re-encoded at very high quality")
         else:
             parts.append("picture copied untouched")
         self.summary.setText(" · ".join(parts) + ".")
-        self.go.setEnabled(bool(mutes or scenes or subs))
+        self.go.setEnabled(bool(mutes or scenes or subs or painted))
 
 
 def clean_timeline(project, filters, duration):

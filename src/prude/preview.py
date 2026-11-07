@@ -63,6 +63,12 @@ def nearest_edit(project, t):
             if best is None or d < best[0]:
                 label = it.get("words") if kind == "word" else (it.get("label") or "Scene")
                 best = (d, a, b, f"{'🔇' if kind == 'word' else '🎬'} {label}")
+    from . import paint
+    for pt in paint.active(getattr(project, "paint", None)):
+        a, b = paint.span(pt)
+        d = 0.0 if a <= t <= b else min(abs(a - t), abs(b - t))
+        if best is None or d < best[0]:
+            best = (d, a, b, f"🖌 {pt.get('label') or 'Painted blur'}")
     return None if best is None else best[1:]
 
 
@@ -123,6 +129,9 @@ def edited_clip(project, filters, settings, start, end, pad=8.0, progress=None, 
     p.source, p.audio_track = str(orig), 0
     p.mutes = _shift(project.mutes, w0, w1)
     p.scenes = _shift(project.scenes, w0, w1)
+    from . import paint
+    p.paint = [paint.shifted(x, w0) for x in paint.active(project.paint)
+               if paint.span(x)[1] > w0 and paint.span(x)[0] < w1]
     p.subtitle_edits, p.burned_edits, p.transcript = [], [], {"track": 0, "words": []}
     f = copy.copy(filters)
     f.advanced = {"enabled": False, "mode": "mute", "engine": "windows"}
@@ -143,6 +152,9 @@ def edited_clip(project, filters, settings, start, end, pad=8.0, progress=None, 
     bits = []
     if words:
         bits.append(f"🔇 {len(words)} word{'s' if len(words) != 1 else ''} silenced")
+    npaint = len(paint.active(p.paint))
+    if npaint:
+        bits.append(f"🖌 {npaint} painted blur{'s' if npaint != 1 else ''}")
     for act, name in (("cut", "✂ cut out"), ("black", "⬛ blacked out"), ("black_keep", "⬛ black screen, sound kept"),
                       ("blur", "◌ blurred"), ("blur_parts", "◌ private parts blurred"), ("mute", "🔇 silenced")):
         n = sum(1 for x in scenes if (x.get("action") or filters.scene_action) == act)
