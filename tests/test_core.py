@@ -1273,3 +1273,67 @@ def test_nearest_edit_picks_the_closest_ticked_item():
     assert nearest_edit(p, 12)[:2] == (10.0, 11.0)
     assert nearest_edit(p, 60)[:2] == (100.0, 120.0)      # the unticked word at 50 doesn't count
     assert nearest_edit(Project(source="x"), 5) is None
+
+
+# ---- blur that follows movement and your own nudges (3.3.0) -------------------------------
+
+def test_scene_nudges_and_blur_margin():
+    from prude.render import scene_ranges
+    p = Project(source="x")
+    p.scenes = [{"start": 10, "end": 20, "on": True, "action": "blur_parts", "pad_before": 0.4, "pad_after": 0.25},
+                {"start": 50, "end": 60, "on": True, "action": "cut", "pad_before": 1.0},
+                {"start": 80, "end": 90, "on": False, "action": "cut"}]
+    r = scene_ranges(p, "cut", 200.0, blur_margin=1.0)
+    assert r["blur_parts"] == [(8.6, 21.25)]           # nudges plus the margin that private-parts blur gets
+    assert r["cut"] == [(49.0, 60.0)]                  # nudges apply to every action, the margin only to blur
+    assert scene_ranges(p, "cut", 200.0)["blur_parts"] == [(9.6, 20.25)]
+
+
+def test_tracking_bridges_gaps_and_merges_overlaps():
+    from prude.blurparts import merge_boxes, track
+    box = (100.0, 100.0, 50.0, 50.0)
+    s = [(0.0, [box]), (0.1, []), (0.2, []), (0.3, [box]), (0.8, []), (1.5, []), (2.0, []), (2.1, [box]), (2.2, [])]
+    out = dict(track(s))
+    assert out[0.1] and out[0.2]                       # a blink between two sightings is blurred through
+    assert out[0.8] == [box]
+    assert out[1.5] == []                              # long gone: nothing blurred
+    assert out[2.0] == [box]                           # picked up a moment before it's found
+    assert out[2.2] == [box]                           # and held a moment after
+    two = merge_boxes([(0, 0, 50, 50), (40, 10, 50, 50), (300, 300, 20, 20)])
+    assert len(two) == 2 and (0, 0, 90, 60) in [tuple(map(int, b)) for b in two]
+
+
+def test_blur_covers_the_edges_and_blinks(media_dir, fake_words, tmp_path, monkeypatch):
+    import cv2
+    from prude import blurparts
+
+    class Mover:   # sees the area from 3.5 to 8.3 s (the scene says 4-8), but misses 5.0-5.3
+        def __init__(self, classes):
+            pass
+
+        def boxes(self, image_path):
+            t = 3.0 + (int(Path(image_path).stem) - 1) / blurparts.SAMPLE_FPS     # the range starts at 4 - 1 s margin
+            return [(40.0, 30.0, 120.0, 90.0)] if 3.5 <= t <= 8.3 and not 5.0 <= t < 5.3 else []
+
+    monkeypatch.setattr(blurparts, "Detector", Mover)
+    f = FilterOptions(words=[], scenes=["nude_f_breasts"], blur_margin=1.0)
+    p = _project(media_dir / "movie51.mkv", fake_words)
+    p.scenes = [{"id": "a", "kind": "nudity", "label": "Nudity", "start": 4.0, "end": 8.0, "on": True,
+                 "action": "blur_parts"}]
+    out = tmp_path / "edges.mkv"
+    res = pipeline.render_project(p, f, Settings(device="cpu"), out)
+    assert res["valid"], res["problems"]
+
+    def frame(path, t):
+        cap = cv2.VideoCapture(str(path))
+        cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
+        ok, img = cap.read()
+        assert ok
+        return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(float)
+
+    inside = (slice(22, 128), slice(28, 172))
+    sharp = lambda img: cv2.Laplacian(img, cv2.CV_64F).var()           # noqa: E731
+    src = media_dir / "movie51.mkv"
+    for t, blurred in ((3.7, True), (5.15, True), (8.2, True), (2.5, False), (9.6, False)):
+        o, c = frame(src, t), frame(out, t)
+        assert (sharp(c[inside]) < 0.3 * sharp(o[inside])) == blurred, t

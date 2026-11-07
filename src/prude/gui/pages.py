@@ -10,7 +10,7 @@ from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                                QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
                                QInputDialog, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
-                               QRadioButton, QScrollArea, QSizePolicy, QSlider, QTableWidget,
+                               QDoubleSpinBox, QRadioButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QTableWidget,
                                QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 
 from .. import confidence, models
@@ -276,6 +276,25 @@ class SetupPage(QWidget):
             sg.changed.connect(self._changed)
             self.groups[g] = sg
             sc.lay.addWidget(sg)
+        brow = QHBoxLayout()
+        brow.addWidget(label("When blurring private parts, look", "Small"))
+        self.blur_margin = QDoubleSpinBox()
+        self.blur_margin.setRange(0.0, 5.0)
+        self.blur_margin.setSingleStep(0.5)
+        self.blur_margin.setSuffix(" s")
+        self.blur_margin.setToolTip("Extra time before and after each flagged scene that is searched and blurred, "
+                                    "so the first and last moments (and people who move) aren't missed.")
+        self.blur_margin.valueChanged.connect(self._changed)
+        brow.addWidget(self.blur_margin)
+        brow.addWidget(label("before and after, blur size", "Small"))
+        self.blur_size = QComboBox()
+        for k, n in (("tight", "Tight"), ("normal", "Normal"), ("large", "Large (moving actors)")):
+            self.blur_size.addItem(n, k)
+        self.blur_size.setToolTip("How far the blur reaches beyond the detected area.")
+        self.blur_size.currentIndexChanged.connect(self._changed)
+        brow.addWidget(self.blur_size)
+        brow.addStretch()
+        sc.lay.addLayout(brow)
         self.scene_note = label("", "Small", wrap=True)
         sc.lay.addWidget(self.scene_note)
         sc.lay.addStretch()
@@ -367,6 +386,8 @@ class SetupPage(QWidget):
         self.pad_val.setText(f"{f.padding:.2f} s")
         (self.mute_center if f.mute_mode == "center" else self.mute_all).setChecked(True)
         self.fade.setChecked(bool(f.mute_fade))
+        self.blur_margin.setValue(float(getattr(f, "blur_margin", 1.0)))
+        self.blur_size.setCurrentIndex(max(0, self.blur_size.findData(getattr(f, "blur_size", "normal"))))
         a = f.advanced or {}
         self.adv_on.setChecked(bool(a.get("enabled")))
         self.adv_box.setVisible(self.adv_on.isChecked())
@@ -393,6 +414,8 @@ class SetupPage(QWidget):
             burned_subs=self.burned.currentData() or "auto",
             mute_mode="center" if self.mute_center.isChecked() else "all",
             mute_fade=self.fade.isChecked(),
+            blur_margin=float(self.blur_margin.value()),
+            blur_size=self.blur_size.currentData() or "normal",
             advanced=self._advanced(),
             scenes=[k for sg in self.groups.values() for k in sg.selected()],
             scene_descriptions=self.groups["custom"].text_value(),
@@ -598,6 +621,28 @@ class SceneRow(QFrame):
         times.addWidget(self.len)
         times.addStretch()
         info.addLayout(times)
+        nudge = QHBoxLayout()
+        nudge.addWidget(label("Start earlier by", "Small"))
+        self.pre = QSpinBox()
+        self.post = QSpinBox()
+        for box, key, tip in ((self.pre, "pad_before", "Begin this edit this much sooner (for blurs: catches the "
+                                                         "first moment before it was flagged)"),
+                              (self.post, "pad_after", "Keep this edit going this much longer (for blurs: "
+                                                       "covers movement after it was flagged)")):
+            box.setRange(0, 15000)
+            box.setSingleStep(100)
+            box.setSuffix(" ms")
+            box.setFixedWidth(92)
+            box.setToolTip(tip)
+            box.setValue(int(round(float(scene.get(key) or 0) * 1000)))
+            box.valueChanged.connect(lambda v, k=key: self._nudge(k, v))
+            if key == "pad_before":
+                nudge.addWidget(box)
+                nudge.addWidget(label("  End later by", "Small"))
+            else:
+                nudge.addWidget(box)
+        nudge.addStretch()
+        info.addLayout(nudge)
         top.addLayout(info, 1)
         outer.addLayout(top)
         btns = QHBoxLayout()
@@ -638,6 +683,11 @@ class SceneRow(QFrame):
             self.s["start"], self.s["end"], self.s["edited"] = round(a, 2), round(b, 2), True
             self.on_change()
         self.len.setText(f"({b - a:.0f} s)")
+
+    def _nudge(self, key, ms):
+        self.s[key] = round(ms / 1000, 3)
+        self.s["edited"] = True
+        self.on_change()
 
     def _toggle(self, on):
         self.s["on"] = on
@@ -1025,7 +1075,8 @@ class ReviewPage(QWidget):
 
     def _refresh_timeline(self):
         p = self.project
-        r = scene_ranges(p, self.filters.scene_action, self.info.duration if self.info else 0.0)
+        r = scene_ranges(p, self.filters.scene_action, self.info.duration if self.info else 0.0,
+                         getattr(self.filters, "blur_margin", 0.0))
         mutes = merge_ranges([(m["start"], m["end"]) for m in p.mutes if m.get("on", True)] + r["mute"])
         self.player.set_filters(mutes, r["cut"], r["black"], r["blur"], r["black_keep"], r["blur_parts"])
         dur = self.info.duration if self.info else max([1.0] + [x["end"] for x in p.mutes + p.scenes])
@@ -1061,7 +1112,7 @@ class ReviewPage(QWidget):
 
 def clean_timeline(project, filters, duration):
     """(new_duration, mutes, other_scenes, cut_points) for the clean copy's timeline."""
-    r = scene_ranges(project, filters.scene_action, duration)
+    r = scene_ranges(project, filters.scene_action, duration, getattr(filters, "blur_margin", 0.0))
     labels = {round(s["start"], 2): s.get("label", "Scene") for s in project.active_scenes()}
     cuts = r["cut"]
     tm = TimeMap(cuts)
@@ -1273,7 +1324,7 @@ class RenderPage(QWidget):
         project, filters, result = self._ctx
         cuts = result.get("cut_ranges")
         if cuts is None:
-            cuts = scene_ranges(project, filters.scene_action)["cut"]
+            cuts = scene_ranges(project, filters.scene_action, 0.0, getattr(filters, "blur_margin", 0.0))["cut"]
         edits = [(m["start"], "silenced: " + (m.get("words") or "")) for m in project.active_mutes()]
         edits += [(s["start"], s.get("label", "scene")) for s in project.active_scenes()]
         self.player.player.pause()

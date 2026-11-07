@@ -108,7 +108,8 @@ class Timeline(QWidget):
         # scenes lane
         y = lanes[0][1]
         for i, s in enumerate(self.scenes):
-            a, b = self._x(s["start"]), self._x(s["end"])
+            a = self._x(s["start"] - float(s.get("pad_before") or 0))
+            b = self._x(s["end"] + float(s.get("pad_after") or 0))
             r = QRectF(a, y + 1, max(3.0, b - a), lane_h - 2)
             on = s.get("on", True)
             if on:

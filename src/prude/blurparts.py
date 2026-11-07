@@ -10,10 +10,14 @@ from pathlib import Path
 
 from .media import Cancelled, ffmpeg, run
 
-SAMPLE_FPS = 5           # detections per second inside blurred scenes
-SLOTS = 6                # most areas blurred at once
-PAD = 0.35               # grow each box by 35% so nothing peeks out as people move
-MIN_SCORE = 0.3
+SAMPLE_FPS = 10          # detections per second inside blurred scenes
+BIG_EVERY = 3            # the sharper (slower) model looks at every 3rd sample as well
+SLOTS = 8                # most areas blurred at once
+GROW = {"tight": 0.2, "normal": 0.5, "large": 0.85}    # how far each box reaches beyond the detected area
+MIN_SCORE = 0.2          # inside a scene you already flagged, a missed flash costs more than a spare blur
+HOLD_AFTER = 0.6         # keep blurring this long after the detector loses the area (it blinks in motion)
+LEAD_BEFORE = 0.3        # ...and start this early when the area is found from the next sample
+BRIDGE = 1.0             # a gap shorter than this between two sightings is blurred through
 DEFAULT_CLASSES = ["FEMALE_BREAST_EXPOSED", "FEMALE_GENITALIA_EXPOSED", "MALE_GENITALIA_EXPOSED",
                    "BUTTOCKS_EXPOSED", "ANUS_EXPOSED"]
 TYPE_CLASSES = {
@@ -60,7 +64,8 @@ class Detector:
 def detect(info, ranges, classes, work_dir: Path, progress=None, cancel=None, detector=None, model=None):
     """Sample each range and find the areas to blur. Returns [(time, [(x, y, w, h)])] in
     the movie's own pixel size, sorted by time."""
-    det = detector or (Detector(classes, model) if model else Detector(classes))
+    det = detector or Detector(classes)
+    big = None if detector else (Detector(classes, model) if model else None)
     W, H = info.width, info.height
     samples = []
     total = sum(b - a for a, b in ranges) or 1.0
@@ -83,7 +88,13 @@ def detect(info, ranges, classes, work_dir: Path, progress=None, cancel=None, de
             if img is None:
                 continue
             sx, sy = W / img.shape[1], H / img.shape[0]
-            boxes = [(x * sx, y * sy, w * sx, h * sy) for x, y, w, h in det.boxes(f)]
+            found = list(det.boxes(f))
+            if big is not None and k % BIG_EVERY == 0:
+                try:
+                    found += list(big.boxes(f))
+                except Exception:              # noqa: BLE001 - the fast model alone still tracks
+                    big = None
+            boxes = [(x * sx, y * sy, w * sx, h * sy) for x, y, w, h in merge_boxes(found)]
             samples.append((a + k / SAMPLE_FPS, boxes))
             if progress and k % 10 == 0:
                 done_now = done + k / SAMPLE_FPS
@@ -94,33 +105,84 @@ def detect(info, ranges, classes, work_dir: Path, progress=None, cancel=None, de
     return samples
 
 
-def _pad_box(x, y, w, h, W, H):
-    px, py = w * PAD / 2, h * PAD / 2
+def merge_boxes(boxes, gap=0.1):
+    """Boxes that touch or overlap become one box covering both (a body seen by two detectors, or an
+    area seen in two neighbouring moments while it moves)."""
+    out = [list(b) for b in boxes]
+    changed = True
+    while changed and len(out) > 1:
+        changed = False
+        for i in range(len(out)):
+            for j in range(i + 1, len(out)):
+                x1, y1, w1, h1 = out[i]
+                x2, y2, w2, h2 = out[j]
+                gx, gy = gap * max(w1, w2), gap * max(h1, h2)
+                if x1 - gx <= x2 + w2 and x2 - gx <= x1 + w1 and y1 - gy <= y2 + h2 and y2 - gy <= y1 + h1:
+                    x, y = min(x1, x2), min(y1, y2)
+                    out[i] = [x, y, max(x1 + w1, x2 + w2) - x, max(y1 + h1, y2 + h2) - y]
+                    del out[j]
+                    changed = True
+                    break
+            if changed:
+                break
+    return [tuple(b) for b in out]
+
+
+def _pad_box(x, y, w, h, W, H, grow=GROW["normal"]):
+    px, py = max(w * grow / 2, 6.0), max(h * grow / 2, 6.0)
     x0, y0 = max(0.0, x - px), max(0.0, y - py)
     x1, y1 = min(float(W), x + w + px), min(float(H), y + h + py)
     return int(x0), int(y0), max(2, int(x1 - x0)), max(2, int(y1 - y0))
 
 
-def write_commands(path: Path, samples, ranges, W, H):
+def track(samples):
+    """Fill the holes a detector leaves while people move: [(time, boxes)] in, same out.
+    A gap between two sightings is blurred through; the area is kept for a moment after it's lost
+    and picked up a moment before it's found."""
+    times = [t for t, _ in samples]
+    base = [list(b) for _, b in samples]
+    out = [list(b) for b in base]
+    for i in range(len(samples)):
+        if base[i]:
+            continue
+        j = i - 1
+        while j >= 0 and not base[j]:
+            j -= 1
+        k = i + 1
+        while k < len(samples) and not base[k]:
+            k += 1
+        prev = base[j] if j >= 0 and times[i] - times[j] <= BRIDGE else None
+        nxt = base[k] if k < len(samples) and times[k] - times[i] <= BRIDGE else None
+        if prev and nxt:
+            out[i] = prev + nxt
+        elif prev and times[i] - times[j] <= HOLD_AFTER:
+            out[i] = prev
+        elif nxt and times[k] - times[i] <= LEAD_BEFORE:
+            out[i] = nxt
+    return [(t, b) for t, b in zip(times, out)]
+
+
+def write_commands(path: Path, samples, ranges, W, H, grow=GROW["normal"]):
     """FFmpeg 'sendcmd' file that moves SLOTS white boxes on the blur mask over time.
-    Each sample's boxes are merged with the next sample's, so a moving area stays covered."""
+    Each sample's boxes are merged with its neighbours', so a moving area stays covered."""
     lines = []
 
     def place(t, boxes):
         cmds = []
         for i in range(SLOTS):
             if i < len(boxes):
-                x, y, w, h = _pad_box(*boxes[i], W, H)
+                x, y, w, h = _pad_box(*boxes[i], W, H, grow)
             else:
                 x, y, w, h = 0, 0, 1, 1      # parked: a single pixel in the corner
             cmds += [f"drawbox@s{i} x {x}", f"drawbox@s{i} y {y}", f"drawbox@s{i} w {w}", f"drawbox@s{i} h {h}"]
         lines.append(f"{max(0.0, t):.3f} " + ", ".join(cmds) + ";")
 
+    samples = track(samples)
     place(0.0, [])
     for i, (t, boxes) in enumerate(samples):
         nxt = samples[i + 1][1] if i + 1 < len(samples) and samples[i + 1][0] - t <= 1.5 / SAMPLE_FPS else []
         prv = samples[i - 1][1] if i > 0 and t - samples[i - 1][0] <= 1.5 / SAMPLE_FPS else []
-        merged = sorted(boxes + nxt + prv, key=lambda b: -b[2] * b[3])[:SLOTS]
+        merged = sorted(merge_boxes(boxes + nxt + prv), key=lambda b: -b[2] * b[3])[:SLOTS]
         place(t - 0.5 / SAMPLE_FPS, merged)
     for a, b in ranges:     # nothing outside the chosen scenes
         place(b + 0.05, [])

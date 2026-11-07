@@ -24,6 +24,8 @@ class FilterOptions:
     scene_action: str = "cut"         # default action: cut | black | blur | mute
     scene_sensitivity: dict = field(default_factory=dict)   # group -> 1..5
     scene_actions: dict = field(default_factory=dict)       # group -> action
+    blur_margin: float = 1.0          # seconds of extra searching and blurring before/after each private-parts scene
+    blur_size: str = "normal"         # how far beyond the detected area the blur reaches: tight | normal | large
 
     @classmethod
     def from_dict(cls, d):

@@ -190,12 +190,23 @@ def build_audio_chain(info, track, mutes, blackouts, cuts, mute_mode, fade=False
 ACTIONS = ("cut", "black", "black_keep", "blur", "blur_parts", "mute")
 
 
-def scene_ranges(project, default_action, duration=0.0):
+def scene_span(s, margin=0.0, action=None):
+    """A scene's start and end with your own nudges (pad_before / pad_after, in seconds) and, for
+    private-parts blur, the extra margin that gives the tracking room to catch the first and last moments."""
+    a = float(s["start"]) - float(s.get("pad_before") or 0.0)
+    b = float(s["end"]) + float(s.get("pad_after") or 0.0)
+    if action == "blur_parts" and margin:
+        a, b = a - margin, b + margin
+    return a, b
+
+
+def scene_ranges(project, default_action, duration=0.0, blur_margin=0.0):
     """{action: merged ranges} for the ticked scenes, each with its own action."""
     out = {a: [] for a in ACTIONS}
     for s in project.active_scenes():
         a = s.get("action") or default_action
-        out[a if a in out else "cut"].append((s["start"], s["end"]))
+        a = a if a in out else "cut"
+        out[a].append(scene_span(s, blur_margin, a))
     return {a: merge_ranges(clamp_ranges(r, duration)) for a, r in out.items()}
 
 
@@ -315,7 +326,8 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
     tmp_files, tmp_dirs = [], []
 
     mutes = merge_ranges(clamp_ranges(((m["start"], m["end"]) for m in project.active_mutes()), info.duration))
-    by_action = scene_ranges(project, filters.scene_action, info.duration)
+    by_action = scene_ranges(project, filters.scene_action, info.duration,
+                             float(getattr(filters, "blur_margin", 0.0) or 0.0))
     cuts, blurs, parts = by_action["cut"], by_action["blur"], by_action["blur_parts"]
     silent_blacks, sound_blacks = by_action["black"], by_action["black_keep"]
     blackouts = merge_ranges(silent_blacks + sound_blacks)
@@ -431,6 +443,7 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
         classes = blurparts.classes_for([t for t in filters.scenes if t.startswith("nude_")])
         from . import models
         big = models.nudenet_640_path(settings.models_path) if models.nudenet_640_ready(settings.models_path) else None
+        grow = blurparts.GROW.get(getattr(filters, "blur_size", "normal"), blurparts.GROW["normal"])
         samples = blurparts.detect(info, parts, classes, out.parent / f".{out.stem}.prude-blur",
                                    (lambda f, m: progress(0.03 * f, m)) if progress else None, cancel,
                                    model=big)
@@ -443,7 +456,7 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
         if found:
             import uuid
             cmd_name = f"prude-blur-{uuid.uuid4().hex[:8]}.cmd"   # plain name: safe inside a filtergraph
-            blurparts.write_commands(out.parent / cmd_name, samples, found, info.width, info.height)
+            blurparts.write_commands(out.parent / cmd_name, samples, found, info.width, info.height, grow)
             tmp_files.append(out.parent / cmd_name)
             pgraph, vsrc = blurparts.filter_parts(info, found, cmd_name, _between(
                 [(a - 0.3, b + 0.3) for a, b in found]))
