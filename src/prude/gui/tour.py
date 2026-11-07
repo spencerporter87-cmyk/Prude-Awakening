@@ -122,6 +122,14 @@ def run_tour(app, out_dir: Path, video=None):
         add(lambda: w.review.tabs.setCurrentIndex(1))
         add(lambda: shot("5-review-scenes"))
 
+        def see_edited():
+            w.review._see_edited()
+        add(see_edited, 15000)
+        add(lambda: (w.review._edited.grab().save(str(Path(out_dir) / "5b-see-it-edited.png")),
+                     (out_dir / "edited-preview.json").write_text(__import__("json").dumps(
+                         {"ok": bool(w.review._edited.res), "summary": (w.review._edited.res or {}).get("summary"),
+                          "note": w.review._edited.note.text()})), w.review._edited.close()))
+
         def export_shot():
             from ..export import ExportOptions
             from .export_dialog import ExportDialog

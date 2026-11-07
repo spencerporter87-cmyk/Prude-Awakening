@@ -1239,3 +1239,37 @@ def test_whole_picture_classifier_reads_the_model_files(tmp_path):
     c.sess = S()
     p = c.probs([tmp_path / "a.jpg", tmp_path / "missing.jpg"])
     assert p.shape == (2,) and p[0] > 0.95
+
+
+# ---- "See it edited" (3.2.1) -------------------------------------------------------------
+
+def test_edited_preview_shows_the_real_edits(media_dir, fake_words):
+    from prude.media import probe
+    from prude.preview import edited_clip, nearest_edit
+    p = _project(media_dir / "movie51.mkv", fake_words)
+    f = FilterOptions(words=["mild", "blasphemy", "strong"], scene_action="cut")
+    pipeline.find_word_mutes(p, f)
+    p.scenes = [_sc(14, 16, "cut")]
+    m = p.mutes[0]
+    out = edited_clip(p, f, Settings(device="cpu"), m["start"], m["end"], pad=3.0)
+    o, e = probe(out["original"]), probe(out["edited"])
+    assert o.video and e.video and e.audio and e.video.get("codec_name") == "h264"
+    assert out["valid"], out["problems"]
+    mid = (m["start"] + m["end"]) / 2 - out["start"]
+    assert level(out["original"], mid) > -40            # the clip of the original has the word
+    assert level(out["edited"], mid) < -60              # the edited clip is silent there
+    assert "silenced" in out["summary"]
+    # a cut scene inside the window shortens the edited clip but not the original
+    far = edited_clip(p, f, Settings(device="cpu"), 13.0, 17.0, pad=2.0)
+    assert probe(far["original"]).duration - probe(far["edited"]).duration == pytest.approx(2.0, abs=0.4)
+    assert "cut out" in far["summary"]
+
+
+def test_nearest_edit_picks_the_closest_ticked_item():
+    from prude.preview import nearest_edit
+    p = Project(source="x")
+    p.mutes = [{"start": 10, "end": 11, "words": "hell", "on": True}, {"start": 50, "end": 51, "words": "damn", "on": False}]
+    p.scenes = [{"start": 100, "end": 120, "label": "Fight", "on": True}]
+    assert nearest_edit(p, 12)[:2] == (10.0, 11.0)
+    assert nearest_edit(p, 60)[:2] == (100.0, 120.0)      # the unticked word at 50 doesn't count
+    assert nearest_edit(Project(source="x"), 5) is None

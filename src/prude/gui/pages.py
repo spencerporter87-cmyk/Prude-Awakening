@@ -556,7 +556,7 @@ class TimesDialog(QDialog):
 
 
 class SceneRow(QFrame):
-    def __init__(self, scene, source, blurred, on_change, on_play=None):
+    def __init__(self, scene, source, blurred, on_change, on_play=None, on_edited=None):
         super().__init__()
         self.s, self.source, self.on_change = scene, source, on_change
         self.setObjectName("Card")
@@ -603,6 +603,9 @@ class SceneRow(QFrame):
         btns = QHBoxLayout()
         btns.addWidget(button("▶ Play", None, lambda: on_play(self.s) if on_play else
                               play_clip(source, self.s["start"], self.s["end"], scene.get("label", "Scene"))))
+        if on_edited:
+            btns.addWidget(button("🎬 Edited", None, lambda: on_edited(self.s),
+                                  tip="See and hear it as it will be in the clean copy"))
         self.chk = QCheckBox("Change it")
         self.chk.setToolTip("Untick to leave this scene as it is")
         self.chk.setChecked(scene.get("on", True))
@@ -669,7 +672,8 @@ class ReviewPage(QWidget):
         self.title = label("Review", "H1")
         lay.addWidget(self.title)
         self.sub = label("Untick anything you want to keep. Click ▶ Play, or anywhere on the timeline, "
-                         "to watch that moment. Turn on “Preview with filters on” to see the result before saving.",
+                         "to watch that moment in the original, or 🎬 See it edited to watch it exactly as the "
+                         "clean copy will be, before saving anything.",
                          "Muted", wrap=True)
         lay.addWidget(self.sub)
 
@@ -685,6 +689,13 @@ class ReviewPage(QWidget):
         menu.addAction("Remove, black out or blur a scene here…", lambda: self._add_scene(self.player.position()))
         self.flag_btn.setMenu(menu)
         self.player.bar_widget.layout().insertWidget(self.player.bar_widget.layout().count() - 1, self.flag_btn)
+        ed_row = QHBoxLayout()
+        self.edited_btn = button("🎬  See it edited", "Primary", lambda: self._see_edited(),
+                                 tip="Makes a short clip around the spot you're on, with your filters really applied")
+        ed_row.addWidget(self.edited_btn)
+        ed_row.addWidget(label("Shows the real result near the playhead (or the closest edit): the actual blur, "
+                               "black screen and silence, with a switch back to the original.", "Small", wrap=True), 1)
+        self.player.layout().insertLayout(2, ed_row)
         self.tabs = QTabWidget()
         main.addWidget(self.tabs, 1)
         lay.addLayout(main, 1)
@@ -765,7 +776,7 @@ class ReviewPage(QWidget):
         lay.addLayout(foot)
 
     def set_project(self, project, info, settings, filters):
-        self.project, self.info, self.filters = project, info, filters
+        self.project, self.info, self.filters, self.settings = project, info, filters, settings
         self.blurred = settings.blur_thumbnails
         self.show_pics.blockSignals(True)
         self.show_pics.setChecked(not self.blurred)
@@ -845,6 +856,8 @@ class ReviewPage(QWidget):
             bl.setContentsMargins(0, 0, 0, 0)
             bl.addWidget(button("▶ Play", "Link", lambda _=False, m=m: self._play(m),
                                 tip="See and hear it in the original"))
+            bl.addWidget(button("🎬 Edited", "Link", lambda _=False, m=m: self._see_edited(m),
+                                tip="See and hear it as it will be in the clean copy"))
             if getattr(self, "advanced", False) and kind == "mute":
                 bl.addWidget(button("🔊 Hear", "Link", lambda _=False, m=m: self._hear(m),
                                     tip="Hear the replacement word (preview uses the Windows voice)"))
@@ -864,7 +877,7 @@ class ReviewPage(QWidget):
                 "No scenes to remove. (Turn on scene options in settings to look for some.)", "Muted"))
         for s in self.project.scenes:
             row = SceneRow(s, self.project.source, self.blurred and s.get("kind") in INTIMATE,
-                           self._scene_changed, self._play)
+                           self._scene_changed, self._play, self._see_edited)
             self.scene_rows.append(row)
             self.scene_list.addWidget(row)
         self.scene_list.addStretch()
@@ -967,6 +980,26 @@ class ReviewPage(QWidget):
                 self._fill_scenes()
                 self._update()
                 self.changed.emit()
+
+    def _see_edited(self, item=None):
+        from ..preview import nearest_edit
+        if not HAVE_MM:
+            QMessageBox.information(self, "See it edited", "The preview player isn't available on this computer.")
+            return
+        if item is not None:
+            a, b = float(item["start"]), float(item["end"])
+            what = item.get("words") or item.get("label") or ""
+        else:
+            near = nearest_edit(self.project, self.player.position())
+            if not near:
+                QMessageBox.information(self, "See it edited",
+                                        "Nothing is ticked yet, so there's nothing to preview.")
+                return
+            a, b, what = near
+        from .edited_preview import EditedPreview
+        self.player.player.pause()
+        self._edited = EditedPreview(self.project, self.filters, self.settings, a, b, what, self)
+        self._edited.show()
 
     def _play(self, item):
         a, b = float(item["start"]), float(item["end"])

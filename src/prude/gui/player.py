@@ -106,7 +106,7 @@ class Player(QWidget):
             self.player.durationChanged.connect(self._dur)
             self.player.playbackStateChanged.connect(self._state)
             self.player.errorOccurred.connect(lambda *_: self.status.setText(
-                "This video can't be previewed here — use ▶ Play in the list instead."))
+                "This video can't be shown here. Try 🎬 See it edited, or ▶ Play in the list."))
         self.tick = QTimer(self)
         self.tick.setInterval(40)
         self.tick.timeout.connect(self._filter_tick)
@@ -123,7 +123,8 @@ class Player(QWidget):
         self.legend_box.addWidget(legend(mode, action))
 
     # ------------------------------------------------------------ media
-    def load(self, path, audio_track=0):
+    def load(self, path, audio_track=0, proxy=True):
+        """proxy=False: the file already has plain H.264 + AAC (the clips made for 'See it edited')."""
         self.status.setText("")
         if HAVE_MM:
             self._proxy_ok = False
@@ -133,7 +134,9 @@ class Player(QWidget):
             self.audio.setMuted(False)           # until the converted sound is ready
             self.player.setSource(QUrl.fromLocalFile(str(path)))
             self.player.pause()   # shows the first frame
-            self.status.setText("Preparing the sound for preview…")
+            if not proxy:
+                return
+            self.status.setText("🔈 Preparing the sound… (first time only: a few minutes for a long movie)")
             tok = self._token
 
             def work():
@@ -148,9 +151,10 @@ class Player(QWidget):
         if tok != self._token:
             return
         if not proxy:
-            self.status.setText("No sound in the preview (use ▶ Play in the list to hear it).")
+            self.status.setText("No sound here. 🎬 See it edited has sound, or use ▶ Play in the list.")
             return
-        self.status.setText("")
+        self.status.setText("🔊 Sound ready")
+        QTimer.singleShot(4000, lambda: self.status.text().startswith("🔊") and self.status.setText(""))
         self.aplayer.setSource(QUrl.fromLocalFile(proxy))
         self.audio.setMuted(True)                # the picture player stays silent
         self._proxy_ok = True
@@ -171,6 +175,8 @@ class Player(QWidget):
         self.player.setPosition(int(ms))
         if getattr(self, "_proxy_ok", False):
             self.aplayer.setPosition(int(ms))
+        if self.live:
+            QTimer.singleShot(60, self._filter_tick)
 
     def stop(self):
         if HAVE_MM:
@@ -225,6 +231,11 @@ class Player(QWidget):
         if not on and HAVE_MM:
             self.snd().setMuted(False)
             self.screen.setCurrentIndex(0)
+            self.status.setText("")
+        elif on and HAVE_MM:
+            self.status.setText("Live preview on: silences and skips happen as it plays. "
+                                "For the exact blur and sound use 🎬 See it edited.")
+            self._filter_tick()                  # take effect right away, even while paused
 
     def _filter_tick(self):
         if not HAVE_MM:
