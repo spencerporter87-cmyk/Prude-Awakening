@@ -278,7 +278,7 @@ def _remove(path, tries=10):
         try:
             Path(path).unlink(missing_ok=True)
             return
-        except PermissionError:
+        except OSError:
             time.sleep(0.3)
 
 
@@ -573,7 +573,7 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
         raise
     finally:
         for f in tmp_files:
-            Path(f).unlink(missing_ok=True)
+            _remove(f)
         if fast_work is not None:
             shutil.rmtree(fast_work, ignore_errors=True)
         for d in tmp_dirs:
