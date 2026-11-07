@@ -31,6 +31,17 @@ jobs:
           pip install onnxruntime
           python -c "import onnxruntime as o; s=o.InferenceSession('640m.onnx'); i=s.get_inputs()[0]; out=s.get_outputs()[0]; print('input', i.name, i.shape, 'output', out.name, out.shape); assert out.shape[1]==22, 'not the NudeNet 640m model'"
           sha256sum 640m.onnx
+          pip install "nudenet>=3.4" opencv-python-headless
+          python - <<'PY'
+          import numpy as np, cv2, time
+          from nudenet import NudeDetector
+          img = (np.random.rand(480, 854, 3) * 255).astype("uint8")
+          cv2.imwrite("t.jpg", img)
+          d = NudeDetector(model_path="640m.onnx", inference_resolution=640)
+          t = time.perf_counter(); r = d.detect("t.jpg"); dt = time.perf_counter() - t
+          print("640m detect ok:", r, f"{dt:.2f}s")
+          t = time.perf_counter(); r2 = NudeDetector().detect("t.jpg"); print("320n detect ok:", r2, f"{time.perf_counter()-t:.2f}s")
+          PY
           cp 640m.onnx nudenet-640m.onnx
       - name: Publish to the models-v1 release
         run: |

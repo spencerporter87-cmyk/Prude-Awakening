@@ -590,15 +590,21 @@ def watch(info, work_dir: Path, models_dir, filters, progress=None, cancel=None,
             hi_dir = work_dir / "hi"
             if report:
                 report(0.0, f"Taking a closer look at {len(todo)} frames")
-            got = hires_frames(info, {i: float(times[i]) for i in todo}, hi_dir, cancel=cancel)
-            big = NudityScorer(models.nudenet_640_path(models_dir), 640)
-            for n, i in enumerate(todo):
-                if cancel is not None and cancel.is_set():
-                    raise Cancelled()
-                path = got.get(i, frames[i])
-                cache["nude_hi"][i] = big.scores(path)
-                if report and n % 5 == 0:
-                    report(n / len(todo), f"Taking a closer look ({n} of {len(todo)} suspicious frames)")
+            try:
+                got = hires_frames(info, {i: float(times[i]) for i in todo}, hi_dir, cancel=cancel)
+                big = NudityScorer(models.nudenet_640_path(models_dir), 640)
+                for n, i in enumerate(todo):
+                    if cancel is not None and cancel.is_set():
+                        raise Cancelled()
+                    path = got.get(i, frames[i])
+                    cache["nude_hi"][i] = big.scores(path)
+                    if report and n % 5 == 0:
+                        report(n / len(todo), f"Taking a closer look ({n} of {len(todo)} suspicious frames)")
+            except Cancelled:
+                raise
+            except Exception as e:                   # noqa: BLE001 - the basic check still stands
+                log(f"The sharper nudity detector failed ({str(e)[:200]}); using the basic check on those frames.")
+                cache["nude_hi"][:] = -1.0
             shutil.rmtree(hi_dir, ignore_errors=True)
             log(f"Timing: sharper detector ran on {len(todo)} of {N} frames "
                 f"({1000 * (time.perf_counter() - t0) / max(1, len(todo)):.0f} ms each).")
