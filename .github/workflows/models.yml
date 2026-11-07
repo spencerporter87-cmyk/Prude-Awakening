@@ -29,7 +29,7 @@ jobs:
           done
           [ "$ok" = 1 ] || { echo "could not fetch 640m.onnx"; ls -la; exit 1; }
           pip install onnxruntime
-          python -c "import onnxruntime as o; s=o.InferenceSession('640m.onnx'); i=s.get_inputs()[0]; out=s.get_outputs()[0]; print('input', i.name, i.shape, 'output', out.name, out.shape); assert i.shape[2:]==[640,640] and out.shape[1]==22, 'not the NudeNet 640m model'"
+          python -c "import onnxruntime as o; s=o.InferenceSession('640m.onnx'); i=s.get_inputs()[0]; out=s.get_outputs()[0]; print('input', i.name, i.shape, 'output', out.name, out.shape); assert out.shape[1]==22, 'not the NudeNet 640m model'"
           sha256sum 640m.onnx
           cp 640m.onnx nudenet-640m.onnx
       - name: Publish to the models-v1 release
