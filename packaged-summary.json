@@ -1,0 +1,123 @@
+{
+ "mutes": [
+  {
+   "start": 4.19,
+   "end": 4.73,
+   "words": "hell",
+   "category": "mild",
+   "rule": "hell",
+   "conf_p": 0.989,
+   "context": "Hello there, my friend. What the hell are you doing? I said, God damn it.",
+   "id": "0c29140839ed",
+   "origin": "auto",
+   "on": true
+  },
+  {
+   "start": 8.09,
+   "end": 8.95,
+   "words": "God damn",
+   "category": "blasphemy",
+   "rule": "god damn*",
+   "conf_p": 0.542,
+   "context": "the hell are you doing? I said, God damn it. That is some bullshit. Have a",
+   "id": "7e56719cd1bc",
+   "origin": "auto",
+   "on": true
+  },
+  {
+   "start": 11.39,
+   "end": 12.29,
+   "words": "bullshit.",
+   "category": "strong",
+   "rule": "bullshit*",
+   "conf_p": 0.978,
+   "context": "said, God damn it. That is some bullshit. Have a wonderful day.",
+   "id": "9542a9d0ffc3",
+   "origin": "auto",
+   "on": true
+  }
+ ],
+ "scenes": [
+  {
+   "kind": "custom:a colorful television test pattern",
+   "group": "custom",
+   "label": "\u201ca colorful television test pattern\u201d",
+   "detail": "",
+   "start": 0.0,
+   "end": 30.0,
+   "score": 1.0,
+   "threshold": 0.42,
+   "why": "",
+   "frame": "C:\\Users\\runneradmin\\AppData\\Local\\PrudeAwakening\\projects\\1a87a1184bf39e85\\frames\\000009.jpg",
+   "action": "blur_parts",
+   "thumb": "C:\\Users\\runneradmin\\AppData\\Local\\PrudeAwakening\\projects\\1a87a1184bf39e85\\thumbs\\custom_a_colorful_television_test_patter_0.jpg",
+   "thumb_blur": "C:\\Users\\runneradmin\\AppData\\Local\\PrudeAwakening\\projects\\1a87a1184bf39e85\\thumbs\\custom_a_colorful_television_test_patter_0_blur.jpg",
+   "id": "7f0e58db9aef",
+   "origin": "auto",
+   "on": true
+  }
+ ],
+ "result": {
+  "output": "D:\\a\\Prude-Awakening\\Prude-Awakening\\out\\e2e\\packaged test (clean).mkv",
+  "how": "video re-encoded on the processor (x264)",
+  "mutes": 3,
+  "cuts": 0,
+  "blackouts": 0,
+  "blurs": 1,
+  "muted_scenes": 0,
+  "parts_blurred": 1,
+  "burned_words": 0,
+  "replaced_words": 0,
+  "cut_ranges": [],
+  "replacement_slots": [],
+  "elevenlabs_characters": 0,
+  "removed_seconds": 0,
+  "notes": [
+   "Made subtitles from the dialogue: packaged test (clean).en.srt"
+  ],
+  "original_duration": 30.0,
+  "final_duration": 30.0,
+  "size_bytes": 4069755,
+  "valid": true,
+  "problems": [],
+  "warnings": [
+   "Video re-encoded (scenes were changed) at very high quality - not bit-for-bit identical to the original.",
+   "Audio re-encoded Dolby Digital (AC3) -> Dolby Digital (AC3) at high bitrate (needed to silence words).",
+   "Made subtitles from the dialogue: packaged test (clean).en.srt"
+  ],
+  "resolution": "1280x720",
+  "finished_at": "2026-11-07 17:40",
+  "edition": ""
+ },
+ "transcript_words": 23,
+ "device": "cpu",
+ "filters": {
+  "words": [
+   "strong",
+   "blasphemy",
+   "mild"
+  ],
+  "excluded_words": [],
+  "custom_words": "",
+  "allow_words": "",
+  "padding": 0.15,
+  "advanced": {
+   "enabled": false,
+   "mode": "mute",
+   "engine": "windows"
+  },
+  "mute_fade": false,
+  "burned_subs": "auto",
+  "star_style": "stars",
+  "mute_mode": "all",
+  "scenes": [
+   "nudity",
+   "violence"
+  ],
+  "scene_descriptions": "a colorful television test pattern",
+  "sensitivity": 3,
+  "scene_action": "blur_parts",
+  "scene_sensitivity": {},
+  "scene_actions": {}
+ }
+}
