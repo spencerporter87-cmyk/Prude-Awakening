@@ -35,9 +35,9 @@ CLIP_REPO = "Xenova/clip-vit-base-patch32"
 CLIP_FILES = ["onnx/vision_model.onnx", "onnx/text_model.onnx", "tokenizer.json"]
 
 # Better nudity detection: NudeNet's larger model and a whole-picture second opinion
-NUDENET_640_URLS = ["https://github.com/notAI-tech/NudeNet/releases/download/v3.4-weights/640m.onnx",
-                    "https://github.com/notAI-tech/NudeNet/releases/download/v3.0/640m.onnx"]
 NSFW_BASE = "https://github.com/spencerporter87-cmyk/Prude-Awakening/releases/download/models-v1/"
+NUDENET_640_URLS = [NSFW_BASE + "nudenet-640m.onnx",      # our own copy first
+                    "https://github.com/notAI-tech/NudeNet/releases/download/v3.4-weights/640m.onnx"]
 NSFW_FILES = ["marqo-nsfw-384.onnx", "marqo-nsfw-384.json"]
 
 GPU_WHEELS = ["nvidia-cublas-cu12", "nvidia-cudnn-cu12", "nvidia-cuda-runtime-cu12"]
@@ -145,8 +145,10 @@ def ensure_nudenet_640(models_dir, progress=None, cancel=None) -> Path:
             _download(url, dest, progress, cancel, "Downloading the sharper nudity detector", 0, 0)
             if nudenet_640_ready(models_dir):
                 return dest
+            got = dest.stat().st_size if dest.exists() else 0
             dest.unlink(missing_ok=True)
-            err = DownloadError("The downloaded detector file was incomplete.")
+            Path(str(dest) + ".part").unlink(missing_ok=True)
+            err = DownloadError(f"The downloaded detector file was incomplete ({got} bytes from {url}).")
         except Cancelled:
             raise
         except Exception as e:                       # noqa: BLE001 - try the next address

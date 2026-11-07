@@ -1,0 +1,39 @@
+name: Publish model files
+
+on:
+  workflow_dispatch:
+  push:
+    paths: [".github/workflows/models.yml"]
+
+permissions:
+  contents: write
+
+jobs:
+  nudenet:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Fetch NudeNet 640m and check it
+        run: |
+          ok=0
+          for u in \
+            https://github.com/notAI-tech/NudeNet/releases/download/v3.4-weights/640m.onnx \
+            https://github.com/notAI-tech/NudeNet/releases/download/v3.4/640m.onnx \
+            https://github.com/notAI-tech/NudeNet/releases/download/v3.0/640m.onnx \
+            https://github.com/notAI-tech/NudeNet/raw/v3/nudenet/640m.onnx \
+            https://github.com/notAI-tech/NudeNet/raw/refs/heads/v3/nudenet/640m.onnx; do
+            echo "try $u"
+            curl -sSL -o 640m.onnx -w "status %{http_code}, %{size_download} bytes\n" "$u" || true
+            if [ -f 640m.onnx ] && [ "$(stat -c%s 640m.onnx)" -gt 50000000 ]; then ok=1; echo "got it from $u"; break; fi
+          done
+          [ "$ok" = 1 ] || { echo "could not fetch 640m.onnx"; ls -la; exit 1; }
+          pip install onnxruntime
+          python -c "import onnxruntime as o; s=o.InferenceSession('640m.onnx'); print('inputs', [(i.name,i.shape) for i in s.get_inputs()], 'outputs', [(i.name,i.shape) for i in s.get_outputs()])"
+          cp 640m.onnx nudenet-640m.onnx
+      - name: Publish to the models-v1 release
+        run: |
+          gh release view models-v1 -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create models-v1 -R "$GITHUB_REPOSITORY" --prerelease --title "Model files" \
+              --notes "AI model files the app downloads on first use."
+          gh release upload models-v1 nudenet-640m.onnx -R "$GITHUB_REPOSITORY" --clobber
