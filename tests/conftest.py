@@ -1,4 +1,6 @@
 import os
+os.environ.setdefault("PRUDE_NO_EXTRA_MODELS", "1")   # unit tests never download helper models
+import os
 import subprocess
 import sys
 from pathlib import Path

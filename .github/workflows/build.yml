@@ -38,6 +38,21 @@ jobs:
         shell: pwsh
         run: ./packaging/get_ffmpeg.ps1
 
+      - name: Prepare the nudity second-opinion model (published once)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $have = gh release view models-v1 --json assets --jq '.assets[].name' 2>$null
+          if (($have -join " ") -match "marqo-nsfw-384.onnx" -and ($have -join " ") -match "marqo-nsfw-384.json") {
+            Write-Host "Model files already published."; exit 0 }
+          pip install torch timm onnx onnxscript
+          python packaging/make_nsfw_model.py out/nsfw
+          if ($LASTEXITCODE -ne 0) { throw "model conversion failed" }
+          gh release view models-v1 2>$null | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create models-v1 --prerelease --title "Model files" --notes "AI model files the app downloads on first use. Marqo/nsfw-image-detection-384 (Apache-2.0) converted to ONNX." }
+          gh release upload models-v1 out/nsfw/marqo-nsfw-384.onnx out/nsfw/marqo-nsfw-384.json --clobber
+
       - name: Cache AI models
         uses: actions/cache@v4
         with:

@@ -34,6 +34,12 @@ WHISPER_SIZES_GB = {"tiny.en": 0.08, "base.en": 0.15, "small.en": 0.5, "medium.e
 CLIP_REPO = "Xenova/clip-vit-base-patch32"
 CLIP_FILES = ["onnx/vision_model.onnx", "onnx/text_model.onnx", "tokenizer.json"]
 
+# Better nudity detection: NudeNet's larger model and a whole-picture second opinion
+NUDENET_640_URLS = ["https://github.com/notAI-tech/NudeNet/releases/download/v3.4-weights/640m.onnx",
+                    "https://github.com/notAI-tech/NudeNet/releases/download/v3.0/640m.onnx"]
+NSFW_BASE = "https://github.com/spencerporter87-cmyk/Prude-Awakening/releases/download/models-v1/"
+NSFW_FILES = ["marqo-nsfw-384.onnx", "marqo-nsfw-384.json"]
+
 GPU_WHEELS = ["nvidia-cublas-cu12", "nvidia-cudnn-cu12", "nvidia-cuda-runtime-cu12"]
 
 
@@ -116,6 +122,60 @@ def fetch_repo(repo, wanted, target: Path, progress=None, cancel=None, label="Do
         done += listing[f]
     marker.write_text("ok")
     return target
+
+
+# ---------------------------------------------------------------- nudity detectors
+
+def nudenet_640_path(models_dir) -> Path:
+    return Path(models_dir) / "nudenet" / "640m.onnx"
+
+
+def nudenet_640_ready(models_dir) -> bool:
+    p = nudenet_640_path(models_dir)
+    return p.exists() and p.stat().st_size > 50_000_000
+
+
+def ensure_nudenet_640(models_dir, progress=None, cancel=None) -> Path:
+    dest = nudenet_640_path(models_dir)
+    if nudenet_640_ready(models_dir):
+        return dest
+    err = None
+    for url in NUDENET_640_URLS:
+        try:
+            _download(url, dest, progress, cancel, "Downloading the sharper nudity detector", 0, 0)
+            if nudenet_640_ready(models_dir):
+                return dest
+            dest.unlink(missing_ok=True)
+            err = DownloadError("The downloaded detector file was incomplete.")
+        except Cancelled:
+            raise
+        except Exception as e:                       # noqa: BLE001 - try the next address
+            err = e
+    raise DownloadError(f"Couldn't download the sharper nudity detector: {err}")
+
+
+def nsfw_dir(models_dir) -> Path:
+    return Path(models_dir) / "nsfw"
+
+
+def nsfw_ready(models_dir) -> bool:
+    d = nsfw_dir(models_dir)
+    return all((d / f).exists() for f in NSFW_FILES)
+
+
+def ensure_nsfw(models_dir, progress=None, cancel=None) -> Path:
+    d = nsfw_dir(models_dir)
+    if nsfw_ready(models_dir):
+        return d / NSFW_FILES[0]
+    for f in NSFW_FILES:
+        if not (d / f).exists():
+            try:
+                _download(NSFW_BASE + f, d / f, progress, cancel, "Downloading the nudity second opinion", 0, 0)
+            except Cancelled:
+                raise
+            except Exception as e:                   # noqa: BLE001
+                raise DownloadError(f"Couldn't download the nudity second opinion: {e}")
+    return d / NSFW_FILES[0]
 
 
 # ---------------------------------------------------------------- Whisper

@@ -37,9 +37,15 @@ def classes_for(scene_types):
 class Detector:
     """Wraps NudeNet; returns [(x, y, w, h)] boxes in the image's pixels."""
 
-    def __init__(self, classes):
+    def __init__(self, classes, model=None):
         from nudenet import NudeDetector
-        self.det = NudeDetector()
+        self.det = None
+        if model:                              # the larger, sharper NudeNet model when it's been downloaded
+            try:
+                self.det = NudeDetector(model_path=str(model), inference_resolution=640)
+            except Exception:                  # noqa: BLE001 - fall back to the built-in one
+                self.det = None
+        self.det = self.det or NudeDetector()
         self.classes = set(classes)
 
     def boxes(self, image_path):
@@ -51,10 +57,10 @@ class Detector:
         return out
 
 
-def detect(info, ranges, classes, work_dir: Path, progress=None, cancel=None, detector=None):
+def detect(info, ranges, classes, work_dir: Path, progress=None, cancel=None, detector=None, model=None):
     """Sample each range and find the areas to blur. Returns [(time, [(x, y, w, h)])] in
     the movie's own pixel size, sorted by time."""
-    det = detector or Detector(classes)
+    det = detector or (Detector(classes, model) if model else Detector(classes))
     W, H = info.width, info.height
     samples = []
     total = sum(b - a for a, b in ranges) or 1.0

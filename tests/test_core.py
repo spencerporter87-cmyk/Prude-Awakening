@@ -1137,3 +1137,105 @@ def test_saving_is_atomic(tmp_path, monkeypatch):
     s.save()
     assert Settings.load().last_preset == "x"
     assert not list((tmp_path / "data").glob("*.tmp"))
+
+
+# ---- better nudity detection (3.2.0) -----------------------------------------------
+
+def _fake_nsfw(monkeypatch, p_by_frame, default=0.0):
+    import numpy as np
+    from prude import scenes as sm
+
+    class FakeNsfw:
+        def __init__(self, *_a):
+            pass
+
+        def probs(self, paths):
+            return np.array([p_by_frame.get(int(Path(p).stem) - 1, default) for p in paths], np.float32)
+
+    monkeypatch.setattr(sm, "NsfwClassifier", FakeNsfw)
+    monkeypatch.setattr(sm.models, "nsfw_ready", lambda d: True)
+
+
+def test_whole_picture_opinion_overrules_a_body_part_false_alarm(media_dir, tmp_path, monkeypatch):
+    rows = {3: {"FEMALE_BREAST_EXPOSED": 0.8}, 4: {"FEMALE_BREAST_EXPOSED": 0.8}}
+    f = FilterOptions(words=[], scenes=["nude_f_breasts"])
+    _fake_models(monkeypatch, rows, {})
+    _fake_nsfw(monkeypatch, {}, default=0.02)             # the whole picture looks harmless
+    assert _watch(media_dir, tmp_path / "a", f) == []
+    _fake_nsfw(monkeypatch, {}, default=0.95)             # the whole picture is explicit too
+    found = _watch(media_dir, tmp_path / "b", f)
+    assert len(found) == 1 and "whole-picture check 95% explicit" in found[0]["why"]
+
+
+def test_one_faint_frame_is_not_a_scene_but_one_sure_frame_is(media_dir, tmp_path, monkeypatch):
+    f = FilterOptions(words=[], scenes=["nude_f_breasts"], sensitivity=3)
+    _fake_models(monkeypatch, {6: {"FEMALE_BREAST_EXPOSED": 0.6}}, {})
+    assert _watch(media_dir, tmp_path / "a", f) == []
+    f5 = FilterOptions(words=[], scenes=["nude_f_breasts"], sensitivity=5)
+    assert len(_watch(media_dir, tmp_path / "b", f5)) == 1      # most sensitive: any single frame
+    _fake_models(monkeypatch, {6: {"FEMALE_BREAST_EXPOSED": 0.95}}, {})
+    assert len(_watch(media_dir, tmp_path / "c", f)) == 1
+
+
+def test_sharper_detector_is_asked_only_about_suspicious_frames(media_dir, tmp_path, monkeypatch):
+    from prude import scenes as sm
+    asked = []
+
+    class Big:
+        def __init__(self, path=None, res=320):
+            self.big = path is not None
+
+        def scores(self, path):
+            if not self.big:
+                i = int(Path(path).stem) - 1
+                return [0.7 if i in (3, 4) else 0.0] + [0.0] * (len(sm.NUDE_CLASS_ORDER) - 1)
+            asked.append(Path(path).stem)
+            return [0.0] * len(sm.NUDE_CLASS_ORDER)           # the sharper look says: nothing there
+
+    _fake_models(monkeypatch, {}, {})
+    monkeypatch.setattr(sm, "NudityScorer", Big)
+    monkeypatch.setattr(sm.models, "nudenet_640_ready", lambda d: True)
+    f = FilterOptions(words=[], scenes=["nude_f_breasts"])
+    assert _watch(media_dir, tmp_path, f) == []              # overruled by the sharper detector
+    assert len(asked) == 2                                    # only the two suspicious of ~20 frames
+
+
+def test_combine_nudity_and_description_check():
+    import numpy as np
+    from prude.scenes import combine_nudity, clip_nude_prob, CHEST
+    det = np.zeros((3, 6), np.float32)
+    det[:, 0] = [0.9, 0.9, 0.9]
+    det[2, CHEST] = 0.8
+    out = combine_nudity(det, nsfw_p=np.array([0.0, 0.9, -1.0]), clip_p=np.array([-1.0, 0.0, -1.0]))
+    assert out[1, 0] < 0.5 < out[2, 0] and out[0, 0] < 0.5       # disagreeing checks cut a hit down
+    assert out[2, CHEST] == pytest.approx(0.8)                    # a bare chest is the detector's call
+    assert (out >= 0).all() and out[0, 0] >= 0.9 * 0.2            # never cut below a fifth
+
+    class T:
+        def embed_texts(self, prompts):
+            e = np.eye(len(prompts), dtype=np.float32)
+            return e
+    embs = np.zeros((1, 25), np.float32)
+    embs[0, 0] = 1.0                                              # looks like the first "naked" prompt
+    assert clip_nude_prob(embs, T())[0] > 0.9
+    embs[0, 0], embs[0, 8] = 0.0, 1.0                             # looks like "a marble statue"... (a safe prompt)
+    assert clip_nude_prob(embs, T())[0] < 0.1
+
+
+def test_whole_picture_classifier_reads_the_model_files(tmp_path):
+    import numpy as np
+    from prude.nsfw import NsfwClassifier
+    import cv2
+    img = np.full((90, 160, 3), 128, np.uint8)
+    cv2.imwrite(str(tmp_path / "a.jpg"), img)
+    c = NsfwClassifier.__new__(NsfwClassifier)
+    c.size, c.mean, c.std, c.nsfw_index, c.input = 384, [0.5] * 3, [0.5] * 3, 1, "input"
+
+    class S:
+        def run(self, _o, feeds):
+            n = feeds["input"].shape[0]
+            assert feeds["input"].shape == (n, 3, 384, 384)
+            return [np.tile(np.array([[0.0, 4.0]], np.float32), (n, 1))]
+    c.sess = S()
+    p = c.probs([tmp_path / "a.jpg", tmp_path / "missing.jpg"])
+    assert p.shape == (2,) and p[0] > 0.95

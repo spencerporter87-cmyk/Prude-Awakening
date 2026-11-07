@@ -3,11 +3,13 @@ descriptions (violence, gore, sexual content, your own descriptions), then turn
 the scores into scenes snapped to the film's camera cuts."""
 
 import json
+import shutil
 from functools import lru_cache
 from pathlib import Path
 
 from . import models
 from .media import Cancelled, ffmpeg, run, run_ffmpeg
+from .nsfw import NsfwClassifier
 
 # ---------------------------------------------------------------- what can be found
 # Groups each have their own "how picky" slider and default action.
@@ -184,24 +186,122 @@ def refine_edges(info, a, b, cache=None):
 # ---------------------------------------------------------------- nudity
 
 class NudityScorer:
-    def __init__(self):
+    """NudeNet. Without a model path: the small 320-pixel model that ships with the package.
+    With the larger 640m model: slower, far better at telling skin from nudity."""
+    MIN_AREA = 0.003          # a "body part" smaller than this share of the picture is noise
+
+    def __init__(self, model_path=None, resolution=320):
         from nudenet import NudeDetector
-        self.det = NudeDetector()
+        if model_path:
+            try:
+                self.det = NudeDetector(model_path=str(model_path), inference_resolution=resolution)
+            except TypeError:                 # an older NudeNet without inference_resolution
+                self.det = NudeDetector(model_path=str(model_path))
+        else:
+            self.det = NudeDetector()
 
     def scores(self, path):
         """Best confidence per class in NUDE_CLASS_ORDER."""
         out = [0.0] * len(NUDE_CLASS_ORDER)
-        for d in self.det.detect(str(path)) or []:
+        dets = self.det.detect(str(path)) or []
+        area = None
+        for d in dets:
             c = d.get("class")
-            if c in NUDE_CLASS_ORDER:
-                i = NUDE_CLASS_ORDER.index(c)
-                out[i] = max(out[i], float(d.get("score", 0)))
+            if c not in NUDE_CLASS_ORDER:
+                continue
+            box = d.get("box")
+            if box and len(box) == 4:
+                if area is None:
+                    try:
+                        from PIL import Image
+                        with Image.open(path) as im:
+                            area = float(im.size[0] * im.size[1])
+                    except Exception:         # noqa: BLE001
+                        area = 0.0
+                if area and (float(box[2]) * float(box[3])) / area < self.MIN_AREA:
+                    continue
+            i = NUDE_CLASS_ORDER.index(c)
+            out[i] = max(out[i], float(d.get("score", 0)))
         return out
 
     def score(self, path):
         sc = self.scores(path)
         best = max((v, c) for v, c in zip(sc, NUDE_CLASS_ORDER) if c in NUDE_CLASSES)
         return best
+
+
+# What the whole picture says. A flag is trusted less when the classifier and the scene
+# description both say "not really nudity"; a bare chest is judged by the detector alone.
+CHEST = NUDE_CLASS_ORDER.index("MALE_BREAST_EXPOSED")
+GATE = 0.2                  # frames below this on every detector never get a second look
+NSFW_GATE = 0.3
+MAX_SECOND_LOOKS = 1500
+VETO_NUDE = ["a naked woman with bare breasts", "a nude man", "a naked person", "bare buttocks",
+             "a woman topless", "two naked people in bed", "full frontal nudity"]
+VETO_SAFE = ["a marble statue", "a classical painting", "a person fully dressed", "a close-up of a face",
+             "a woman in a bikini", "a shirtless man", "a woman in a low-cut dress", "a cartoon character",
+             "a person in a skin-colored outfit", "a close-up of skin or a hand", "a muscular man in shorts",
+             "a woman in a swimsuit at the beach", "people wearing clothes", "a baby", "a sunset landscape",
+             "a wooden object", "a person in a bathrobe", "dancers in costumes"]
+
+
+def clip_nude_prob(embs, scorer):
+    """Per frame: how much of the CLIP probability lands on 'naked' descriptions rather than
+    on lookalikes (statues, bikinis, close-ups, clothed people)."""
+    import numpy as np
+    prompts = VETO_NUDE + VETO_SAFE
+    text = scorer.embed_texts(prompts)
+    logits = 100.0 * np.asarray(embs, np.float32) @ text.T
+    logits -= logits.max(axis=1, keepdims=True)
+    e = np.exp(logits)
+    e /= e.sum(axis=1, keepdims=True)
+    return e[:, :len(VETO_NUDE)].sum(axis=1).astype(np.float32)
+
+
+def combine_nudity(det, nsfw_p=None, clip_p=None):
+    """det: (frames x classes) detector scores. nsfw_p / clip_p: per-frame arrays, negative
+    where that check wasn't run. Returns the scores to trust: a body-part hit is cut down when
+    the whole-picture checks disagree (never below a fifth, so very obvious hits still show)."""
+    import numpy as np
+    det = np.asarray(det, np.float32)
+    f = np.ones(len(det), np.float32)
+    if nsfw_p is not None:
+        p = np.asarray(nsfw_p, np.float32)
+        f *= np.where(p >= 0, 0.35 + 0.65 * np.minimum(1.0, p / 0.4), 1.0)
+    if clip_p is not None:
+        c = np.asarray(clip_p, np.float32)
+        f *= np.where(c >= 0, 0.5 + 0.5 * np.minimum(1.0, c / 0.25), 1.0)
+    f = np.maximum(0.2, f)
+    out = det * f[:, None]
+    out[:, CHEST] = det[:, CHEST]          # shirtless men: the detector alone decides
+    return out
+
+
+def hires_frames(info, times, dest: Path, width=960, cancel=None, workers=4):
+    """Sharper copies of just the frames that need a second look. Returns {index: path}."""
+    import concurrent.futures as cf
+    dest.mkdir(parents=True, exist_ok=True)
+    vf = f"scale={width}:-2"
+    if info.is_hdr and " zscale " in _filters() and " tonemap " in _filters():
+        vf = (f"zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,"
+              f"zscale=t=bt709:m=bt709:r=tv,{vf}")
+    vf += ",format=yuvj420p"
+
+    def one(item):
+        i, t = item
+        out = dest / f"{i:06d}.jpg"
+        if cancel is not None and cancel.is_set():
+            return i, None
+        r = run([ffmpeg(), "-y", "-loglevel", "error", "-ss", f"{max(0.0, t):.3f}", "-i", str(info.path),
+                 "-map", "0:v:0", "-frames:v", "1", "-an", "-sn", "-vf", vf, "-q:v", "3", str(out)])
+        return i, (out if r.returncode == 0 and out.exists() else None)
+
+    found = {}
+    with cf.ThreadPoolExecutor(max_workers=workers) as ex:
+        for i, path in ex.map(one, list(times.items())):
+            if path:
+                found[i] = path
+    return found
 
 
 # ---------------------------------------------------------------- CLIP descriptions
@@ -422,10 +522,37 @@ def watch(info, work_dir: Path, models_dir, filters, progress=None, cancel=None,
     if "bounds" not in cache:
         cache["bounds"] = np.array(shot_boundaries(frames, FPS, stage("analyze", 0, 0.1), cancel),
                                    dtype=np.float32)
+    import os
+    import time
+    if int(cache.get("nude_ver", [0])[0]) != 2:
+        for k in ("nude_cls", "nsfw_p", "nude_hi", "veto_clip"):
+            cache.pop(k, None)
+    extras_ok = os.environ.get("PRUDE_NO_EXTRA_MODELS") != "1"
+
+    def have(ready, ensure, what):
+        """A helper model: use it if present, fetch it if allowed, otherwise carry on without."""
+        if ready(models_dir):
+            return True
+        if not extras_ok:
+            return False
+        try:
+            ensure(models_dir, stage("models", 0, 1), cancel)
+            return True
+        except Cancelled:
+            raise
+        except Exception as e:                       # noqa: BLE001
+            log(f"{what} isn't available ({str(e)[:160]}); using the basic nudity check only.")
+            return False
+
+    use_nsfw = use_big = False
+    if want_nude:
+        use_nsfw = have(models.nsfw_ready, models.ensure_nsfw, "The nudity second opinion")
+        use_big = have(models.nudenet_640_ready, models.ensure_nudenet_640, "The sharper nudity detector")
     if want_nude and "nude_cls" not in cache:
         scorer = NudityScorer()
         vals = np.zeros((len(frames), len(NUDE_CLASS_ORDER)), dtype=np.float32)
-        report = stage("analyze", 0.1, 0.55 if want_clip and "clip" not in cache else 1.0)
+        report = stage("analyze", 0.1, 0.4 if want_clip and "clip" not in cache else 0.7)
+        t0 = time.perf_counter()
         for i, p in enumerate(frames):
             if cancel is not None and cancel.is_set():
                 raise Cancelled()
@@ -433,6 +560,64 @@ def watch(info, work_dir: Path, models_dir, filters, progress=None, cancel=None,
             if report and i % 20 == 0:
                 report(i / len(frames), f"Checking for nudity ({i} of {len(frames)} frames)")
         cache["nude_cls"] = vals
+        log(f"Timing: quick nudity check {1000 * (time.perf_counter() - t0) / len(frames):.0f} ms per frame.")
+    if want_nude and use_nsfw and "nsfw_p" not in cache:
+        clf = NsfwClassifier(models.nsfw_dir(models_dir) / models.NSFW_FILES[0])
+        probs = []
+        report = stage("analyze", 0.4 if want_clip and "clip" not in cache else 0.7, 0.55 if want_clip and "clip" not in cache else 0.85)
+        t0 = time.perf_counter()
+        for i in range(0, len(frames), 16):
+            if cancel is not None and cancel.is_set():
+                raise Cancelled()
+            probs.append(clf.probs(frames[i:i + 16]))
+            if report:
+                report(i / len(frames), f"Second opinion on the whole picture ({i} of {len(frames)} frames)")
+        cache["nsfw_p"] = np.concatenate(probs).astype(np.float32)
+        log(f"Timing: whole-picture second opinion {1000 * (time.perf_counter() - t0) / len(frames):.0f} ms per frame.")
+    if want_nude:
+        # frames where any detector smells something get a closer look
+        N = len(frames)
+        sus = cache["nude_cls"].max(axis=1)
+        if "nsfw_p" in cache:
+            sus = np.maximum(sus, np.where(cache["nsfw_p"] >= NSFW_GATE, 0.5, 0.0))
+        cand = [int(i) for i in np.argsort(-sus)[:MAX_SECOND_LOOKS] if sus[i] >= GATE]
+        cache.setdefault("nude_hi", np.full((N, len(NUDE_CLASS_ORDER)), -1.0, dtype=np.float32))
+        cache.setdefault("veto_clip", np.full(N, -1.0, dtype=np.float32))
+        todo = [i for i in cand if cache["nude_hi"][i, 0] < 0]
+        if use_big and todo:
+            report = stage("analyze", 0.85, 0.93)
+            t0 = time.perf_counter()
+            hi_dir = work_dir / "hi"
+            if report:
+                report(0.0, f"Taking a closer look at {len(todo)} frames")
+            got = hires_frames(info, {i: float(times[i]) for i in todo}, hi_dir, cancel=cancel)
+            big = NudityScorer(models.nudenet_640_path(models_dir), 640)
+            for n, i in enumerate(todo):
+                if cancel is not None and cancel.is_set():
+                    raise Cancelled()
+                path = got.get(i, frames[i])
+                cache["nude_hi"][i] = big.scores(path)
+                if report and n % 5 == 0:
+                    report(n / len(todo), f"Taking a closer look ({n} of {len(todo)} suspicious frames)")
+            shutil.rmtree(hi_dir, ignore_errors=True)
+            log(f"Timing: sharper detector ran on {len(todo)} of {N} frames "
+                f"({1000 * (time.perf_counter() - t0) / max(1, len(todo)):.0f} ms each).")
+    if want_nude and cand:
+        # does the scene description agree it's a naked person (and not a statue, a bikini...)?
+        todo_v = [i for i in cand if cache["veto_clip"][i] < 0]
+        if todo_v and have(models.clip_ready, models.ensure_clip, "The scene model"):
+            try:
+                vs = ClipScorer(Path(models_dir) / "clip")
+                for k in range(0, len(todo_v), 16):
+                    if cancel is not None and cancel.is_set():
+                        raise Cancelled()
+                    chunk = todo_v[k:k + 16]
+                    cache["veto_clip"][chunk] = clip_nude_prob(vs.embed_images([frames[i] for i in chunk]), vs)
+            except Cancelled:
+                raise
+            except Exception as e:                   # noqa: BLE001 - the other checks still apply
+                log(f"The description check on suspicious frames failed ({str(e)[:160]}); skipping it.")
+    cache["nude_ver"] = np.array([2])
     if want_clip and "clip" not in cache:
         scorer = ClipScorer(Path(models_dir) / "clip")
         embs = []
@@ -452,14 +637,38 @@ def watch(info, work_dir: Path, models_dir, filters, progress=None, cancel=None,
     tl = [float(t) for t in times]
     scenes = []
 
+    trusted = None
+    if want_nude:
+        det = cache["nude_cls"].copy()
+        hi = cache.get("nude_hi")
+        if hi is not None:
+            done = hi[:, 0] >= 0
+            det[done] = hi[done]                    # the sharper detector's word wins where it looked
+        vc = cache.get("veto_clip")
+        trusted = combine_nudity(det, cache.get("nsfw_p"), vc if vc is not None and (vc >= 0).any() else None)
+
     def col(cls_names):
         idx = [NUDE_CLASS_ORDER.index(c) for c in cls_names]
-        return cache["nude_cls"][:, idx].max(axis=1)
+        return trusted[:, idx].max(axis=1)
 
-    def add(kind, group, label, a, b, peak, idx, detail="", thr=None):
+    def why(idx):
+        """What each check said about the frame that decided the scene."""
+        bits = [f"body-part detector {100 * float(cache['nude_cls'][idx].max()):.0f}%"]
+        hi_ = cache.get("nude_hi")
+        if hi_ is not None and hi_[idx, 0] >= 0:
+            bits = [f"sharper body-part detector {100 * float(hi_[idx].max()):.0f}%"]
+        if cache.get("nsfw_p") is not None:
+            bits.append(f"whole-picture check {100 * float(cache['nsfw_p'][idx]):.0f}% explicit")
+        v = cache.get("veto_clip")
+        if v is not None and v[idx] >= 0:
+            bits.append(f"description check {100 * float(v[idx]):.0f}% naked")
+        return "; ".join(bits)
+
+    def add(kind, group, label, a, b, peak, idx, detail="", thr=None, reason=""):
         scenes.append({"kind": kind, "group": group, "label": label, "detail": detail,
                        "start": a, "end": b, "score": round(float(peak), 2),
                        "threshold": None if thr is None else round(float(thr), 2),
+                       "why": reason,
                        "frame": str(frames[idx]), "action": act_of(group)})
 
     # ---- nudity, body part by body part
@@ -467,12 +676,15 @@ def watch(info, work_dir: Path, models_dir, filters, progress=None, cancel=None,
         thr = NUDE_THRESH.get(s_of("nudity"), 0.45)
         per_type = {t: col(NUDE_TYPES[t]) for t in nude_types}
         combined = np.max(np.stack(list(per_type.values())), axis=0)
-        for a, b, peak, idx in build_segments(times, combined, thr, bounds, info.duration):
+        # a flag needs two frames in a row (or one very sure one); at the most sensitive setting any single frame counts
+        persist = s_of("nudity") < 5
+        for a, b, peak, idx in build_segments(times, combined, thr, bounds, info.duration,
+                                               min_hits=2 if persist else 1, strong=min(0.97, thr + 0.3)):
             win = _window(tl, a, b)
             found = [t for t in nude_types if win and float(per_type[t][win].max()) >= thr]
             names = [NUDE_SHORT[t] for t in found] or ["nudity"]
             label = "Shirtless man" if found == ["nude_m_chest"] else "Nudity"
-            add("nudity", "nudity", label, a, b, peak, idx, ", ".join(names), thr)
+            add("nudity", "nudity", label, a, b, peak, idx, ", ".join(names), thr, reason=why(idx))
 
     # ---- scene descriptions (CLIP)
     probs = {}

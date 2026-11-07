@@ -582,7 +582,7 @@ class SceneRow(QFrame):
         lvl, why = confidence.scene(scene)
         self.sure = QLabel(f"● {confidence.NAMES[lvl]}")
         self.sure.setStyleSheet(f"color:{confidence.COLORS[lvl]}; font-weight:600;")
-        self.sure.setToolTip(why)
+        self.sure.setToolTip(why + (f"\n\nWhat each check said: {scene['why']}" if scene.get("why") else ""))
         self.level = lvl
         if bits:
             info.addWidget(label(" · ".join(bits), "Small", wrap=True))

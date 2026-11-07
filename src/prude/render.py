@@ -429,8 +429,11 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
     if parts and info.video:
         from . import blurparts
         classes = blurparts.classes_for([t for t in filters.scenes if t.startswith("nude_")])
+        from . import models
+        big = models.nudenet_640_path(settings.models_path) if models.nudenet_640_ready(settings.models_path) else None
         samples = blurparts.detect(info, parts, classes, out.parent / f".{out.stem}.prude-blur",
-                                   (lambda f, m: progress(0.03 * f, m)) if progress else None, cancel)
+                                   (lambda f, m: progress(0.03 * f, m)) if progress else None, cancel,
+                                   model=big)
         found = [(a, b) for a, b in parts if any(a - 0.5 <= t <= b + 0.5 and bx for t, bx in samples)]
         missing = [r for r in parts if r not in found]
         if missing:
