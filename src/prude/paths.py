@@ -14,6 +14,14 @@ IS_FROZEN = bool(getattr(sys, "frozen", False))
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 
+def write_atomic(path, text: str):
+    """Write a file so a crash or power cut mid-save can't leave half a file behind."""
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def bundle_dir() -> Path:
     """Folder holding bundled extras (ffmpeg) - next to the .exe when packaged,
     the repository's vendor/ folder when running from source."""

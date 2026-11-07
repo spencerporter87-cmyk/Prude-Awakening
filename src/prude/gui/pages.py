@@ -992,7 +992,7 @@ class ReviewPage(QWidget):
 
     def _refresh_timeline(self):
         p = self.project
-        r = scene_ranges(p, self.filters.scene_action)
+        r = scene_ranges(p, self.filters.scene_action, self.info.duration if self.info else 0.0)
         mutes = merge_ranges([(m["start"], m["end"]) for m in p.mutes if m.get("on", True)] + r["mute"])
         self.player.set_filters(mutes, r["cut"], r["black"], r["blur"], r["black_keep"], r["blur_parts"])
         dur = self.info.duration if self.info else max([1.0] + [x["end"] for x in p.mutes + p.scenes])
@@ -1028,7 +1028,7 @@ class ReviewPage(QWidget):
 
 def clean_timeline(project, filters, duration):
     """(new_duration, mutes, other_scenes, cut_points) for the clean copy's timeline."""
-    r = scene_ranges(project, filters.scene_action)
+    r = scene_ranges(project, filters.scene_action, duration)
     labels = {round(s["start"], 2): s.get("label", "Scene") for s in project.active_scenes()}
     cuts = r["cut"]
     tm = TimeMap(cuts)

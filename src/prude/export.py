@@ -35,18 +35,35 @@ class ExportOptions:
 
 def clean_name(text):
     text = re.sub(_BAD, "", str(text)).strip().strip(".")
-    return re.sub(r"\s+", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    if re.fullmatch(r"(?i)(con|prn|aux|nul|com\d|lpt\d)", text):   # names Windows won't allow for a file
+        text += " _"
+    return text
 
 
 def parse_title(src: Path):
     """("Pretty Woman", "1990") from 'Pretty Woman (1990).mkv', 'Pretty.Woman.1990.1080p.mkv'
-    or a 'Pretty Woman (1990)' folder."""
+    or a 'Pretty Woman (1990)' folder. A year in brackets wins; otherwise the last plausible
+    year, so 'Blade Runner 2049 (2017)' and '2012 (2009)' keep their numbers in the title."""
+    from datetime import date
+    latest = date.today().year + 1
     for name in (src.stem, src.parent.name):
         n = re.sub(r"\{edition-[^}]*\}", "", name)
-        m = re.match(r"^(.*?)[\s._\-\[(]*((?:19|20)\d{2})(?:[\s._\-\])]|$)", n)
-        if m and m.group(1).strip(" ._-"):
-            title = re.sub(r"[._]+", " ", m.group(1)).strip(" -")
-            return clean_name(title), m.group(2)
+        found = None
+        for rx in (r"[\(\[]\s*((?:19|20)\d{2})\s*[\)\]]", r"(?<![\d])((?:19|20)\d{2})(?![\d])"):
+            for m in reversed(list(re.finditer(rx, n))):
+                year = m.group(1)
+                if int(year) > latest:
+                    continue
+                before = re.sub(r"[\s._\-\[(]+$", "", n[:m.start()])
+                if before:
+                    found = (before, year)
+                    break
+            if found:
+                break
+        if found:
+            title = re.sub(r"[._]+", " ", found[0]).strip(" -")
+            return clean_name(title), found[1]
     return clean_name(re.sub(r"[._]+", " ", src.stem)), ""
 
 

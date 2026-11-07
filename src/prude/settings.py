@@ -89,7 +89,8 @@ class Settings:
         return out
 
     def save(self):
-        (app_data_dir() / "settings.json").write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
+        from .paths import write_atomic
+        write_atomic(app_data_dir() / "settings.json", json.dumps(asdict(self), indent=2))
 
     @classmethod
     def load(cls):

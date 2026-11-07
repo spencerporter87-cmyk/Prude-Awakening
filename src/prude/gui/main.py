@@ -411,7 +411,7 @@ class MainWindow(QMainWindow):
         opts = ExportOptions.from_dict(self.settings.export) if self.settings.export else \
             ExportOptions(folder=self.settings.output_dir, quality=self.settings.video_quality,
                           naming="plex_edition")
-        r = scene_ranges(self.project, f.scene_action)
+        r = scene_ranges(self.project, f.scene_action, self.info.duration if self.info else 0.0)
         reencode = any(r[a] for a in ("cut", "black", "black_keep", "blur", "blur_parts")) or \
             (f.advanced or {}).get("mode") == "replace_lipsync"
         removed = sum(b - a for a, b in r["cut"])

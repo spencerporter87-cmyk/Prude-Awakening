@@ -1066,3 +1066,74 @@ def test_update_check_and_download(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError):
         updater.download(bad, get=lambda *a, **k: R(200, None, blob))
     assert not list(tmp_path.rglob("*.part"))                  # a bad download is never kept
+
+
+# ---- bug hunt (3.1.2) ------------------------------------------------------------
+
+def _sc(a, b, action="cut"):
+    return {"id": f"s{a}", "kind": "violence", "label": "V", "start": a, "end": b, "on": True, "action": action}
+
+
+def test_scenes_hanging_over_the_edges_are_trimmed_to_the_movie(media_dir, fake_words):
+    """A scene that starts before 0 or ends after the movie must not skew the cut length."""
+    from prude.render import clamp_ranges
+    assert clamp_ranges([(-3, 2), (18, 25), (30, 40), (5, 5)], 20.0) == [(0.0, 2.0), (18.0, 20.0)]
+    f = FilterOptions(words=["mild"])
+    for scenes, kept in (([_sc(-3, 2)], 18.0), ([_sc(18, 26)], 18.0)):
+        p = _project(media_dir / "movie51.mkv", fake_words)
+        p.scenes = scenes
+        res = pipeline.render_project(p, f, Settings(device="cpu"), export=None)
+        assert res["valid"], res["problems"]
+        assert res["final_duration"] == pytest.approx(kept, abs=0.3)
+
+
+def test_subtitle_lines_past_the_end_dont_lengthen_the_file(media_dir, fake_words):
+    from prude.subtitles import clip_cues
+    assert clip_cues([[1, 2, "a"], [19.5, 22, "b"], [25, 26, "c"], [-2, 0.01, "d"]], 20.0) == \
+        [[1.0, 2.0, "a"], [19.5, 20.0, "b"]]
+    late = [dict(w, s=w["s"], e=w["e"]) for w in fake_words] + [{"w": "damn", "s": 19.8, "e": 21.5, "p": 0.9}]
+    p = _project(media_dir / "movie51.mkv", late)
+    f = FilterOptions(words=["mild"])
+    pipeline.find_word_mutes(p, f)
+    res = pipeline.render_project(p, f, Settings(device="cpu"), export=None)
+    assert res["valid"], res["problems"]
+    assert res["final_duration"] == pytest.approx(20.0, abs=0.3)
+
+
+def test_file_without_sound_gives_a_clear_message(tmp_path, fake_words):
+    from conftest import ff
+    from prude.media import MediaError
+    src = tmp_path / "silent.mkv"
+    ff("-f", "lavfi", "-i", "testsrc2=s=320x180:r=24:d=4", "-c:v", "libx264", "-preset", "ultrafast", str(src))
+    p = Project.open(src)
+    p.scenes = [_sc(1, 2)]
+    with pytest.raises(MediaError, match="no audio track"):
+        pipeline.render_project(p, FilterOptions(words=["mild"]), Settings(device="cpu"))
+
+
+def test_censoring_keeps_quote_marks_and_hells_is_caught():
+    pats = build_patterns(["strong", "mild"])
+    assert censor_text("‘bitch’ he said", pats)[0] == "‘****’ he said"
+    assert censor_text("'damn' it, \"hell\" no", pats)[0] == "'****' it, \"****\" no"
+    assert censor_text("Hell's bells, what the hells", pats)[1] == 2
+    assert censor_text("Hello, Hellen and Michelle", pats)[1] == 0
+
+
+def test_movie_titles_with_numbers_keep_them():
+    from prude.export import parse_title, clean_name
+    cases = {"2012 (2009).mkv": ("2012", "2009"), "Blade Runner 2049 (2017).mkv": ("Blade Runner 2049", "2017"),
+             "Blade.Runner.2049.2017.1080p.BluRay.mkv": ("Blade Runner 2049", "2017"),
+             "1917 (2019).mkv": ("1917", "2019"), "Pretty.Woman.1990.1080p.mkv": ("Pretty Woman", "1990"),
+             "Blade Runner 2049.mkv": ("Blade Runner 2049", ""), "Up (2009) {edition-Family Edit}.mkv": ("Up", "2009")}
+    for name, want in cases.items():
+        assert parse_title(Path("/m") / name) == want, name
+    assert clean_name("CON") != "CON" and clean_name("Up") == "Up"
+
+
+def test_saving_is_atomic(tmp_path, monkeypatch):
+    monkeypatch.setenv("PRUDE_DATA_DIR", str(tmp_path / "data"))
+    s = Settings()
+    s.last_preset = "x"
+    s.save()
+    assert Settings.load().last_preset == "x"
+    assert not list((tmp_path / "data").glob("*.tmp"))

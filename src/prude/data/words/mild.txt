@@ -1,6 +1,6 @@
 # Mild language
 damn: damn*, dammit, damnit
-hell: hell, hellhole
+hell: hell, hell's, hells, hellhole
 crap: crap*
 ass: ass, asses, arse
 butt: butt, butthead*

@@ -7,7 +7,7 @@ import shutil
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from .paths import projects_dir
+from .paths import projects_dir, write_atomic
 
 
 SCHEMA = 2
@@ -68,7 +68,7 @@ class Project:
         return d
 
     def save(self):
-        (self.dir / "project.json").write_text(json.dumps(asdict(self), default=_plain), encoding="utf-8")
+        write_atomic(self.dir / "project.json", json.dumps(asdict(self), default=_plain))
 
     @classmethod
     def open(cls, source) -> "Project":

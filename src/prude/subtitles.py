@@ -75,6 +75,20 @@ class TimeMap:
         return ma, mb
 
 
+def clip_cues(cues, duration):
+    """Drop subtitle lines that start after the movie ends and trim ones that run past it, so a
+    stray late line can't make the finished file longer than the movie."""
+    if not duration:
+        return cues
+    out = []
+    for a, b, text in cues:
+        a = max(0.0, float(a))
+        b = min(float(b), float(duration))
+        if b - a >= 0.05:
+            out.append([a, b, text])
+    return out
+
+
 def shift_cues(cues, cuts):
     if not cuts:
         return cues

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .media import (LANG3, LANG_NAMES, TEXT_SUB_CODECS, MediaError, channel_layouts, encoder_works,
                     encoders, ffmpeg, ffmpeg_major_version, run_ffmpeg, stream_bitrate)
-from .subtitles import (clean_cues, extract_text_sub, generate_cues, read_srt, shift_cues,
+from .subtitles import (clean_cues, clip_cues, extract_text_sub, generate_cues, read_srt, shift_cues,
                         write_srt)
 
 KEEP_CONTAINERS = {".mkv", ".mp4", ".m4v", ".mov"}
@@ -31,6 +31,18 @@ def merge_ranges(ranges, gap=0.05):
         else:
             out.append([a, b])
     return [(a, b) for a, b in out]
+
+
+def clamp_ranges(ranges, duration):
+    """Keep ranges inside the movie: nothing before 0 or after the end (a scene or mute that
+    hangs over an edge would otherwise throw off the cut lengths and the finished file's length)."""
+    out = []
+    for a, b in ranges:
+        a = max(0.0, float(a))
+        b = min(float(duration), float(b)) if duration else float(b)
+        if b > a:
+            out.append((a, b))
+    return out
 
 
 def _between(ranges, var="t"):
@@ -178,13 +190,13 @@ def build_audio_chain(info, track, mutes, blackouts, cuts, mute_mode, fade=False
 ACTIONS = ("cut", "black", "black_keep", "blur", "blur_parts", "mute")
 
 
-def scene_ranges(project, default_action):
+def scene_ranges(project, default_action, duration=0.0):
     """{action: merged ranges} for the ticked scenes, each with its own action."""
     out = {a: [] for a in ACTIONS}
     for s in project.active_scenes():
         a = s.get("action") or default_action
         out[a if a in out else "cut"].append((s["start"], s["end"]))
-    return {a: merge_ranges(r) for a, r in out.items()}
+    return {a: merge_ranges(clamp_ranges(r, duration)) for a, r in out.items()}
 
 
 def build_video_chain(blackouts, cuts, blurs=(), src="[0:v:0]", scale_h=None):
@@ -293,15 +305,17 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
     from .export import target_height
     quality = export.quality if export else settings.video_quality
     scale_h = target_height(info, export) if export else None
-    track = project.audio_track
+    if not info.audio:
+        raise MediaError("This file has no audio track, so there is nothing to filter.")
+    track = project.audio_track if 0 <= project.audio_track < len(info.audio) else 0
     st = info.audio[track].raw
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out_ext = out.suffix.lower()
     tmp_files, tmp_dirs = [], []
 
-    mutes = merge_ranges((m["start"], m["end"]) for m in project.active_mutes())
-    by_action = scene_ranges(project, filters.scene_action)
+    mutes = merge_ranges(clamp_ranges(((m["start"], m["end"]) for m in project.active_mutes()), info.duration))
+    by_action = scene_ranges(project, filters.scene_action, info.duration)
     cuts, blurs, parts = by_action["cut"], by_action["blur"], by_action["blur_parts"]
     silent_blacks, sound_blacks = by_action["black"], by_action["black_keep"]
     blackouts = merge_ranges(silent_blacks + sound_blacks)
@@ -382,7 +396,7 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
                     continue
                 if is_english_track(s):
                     starred += clean_cues(cues, patterns, style, kept)
-                cues = shift_cues(cues, cuts)
+                cues = shift_cues(clip_cues(cues, info.duration), cuts)
                 if not cues:
                     continue
                 write_srt(tmp, cues)
@@ -400,7 +414,8 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
         words = project.transcript.get("words") or []
         if settings.make_subtitles and words:
             side = out.with_name(f"{out.stem}.{project.language}.srt")
-            cues = shift_cues(generate_cues(words, project.active_mutes(), patterns, style), cuts)
+            cues = shift_cues(clip_cues(generate_cues(words, project.active_mutes(), patterns, style),
+                                        info.duration), cuts)
             if cues:
                 write_srt(side, cues)
                 subs.append((side, LANG3.get(project.language, project.language),

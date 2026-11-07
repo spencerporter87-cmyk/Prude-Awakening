@@ -156,7 +156,7 @@ def matched_word_ids(words, patterns):
     return ids
 
 
-_WORD_RE = re.compile(r"[A-Za-z0-9'’*]+(?:-[A-Za-z0-9'’]+)*")
+_WORD_RE = re.compile(r"[A-Za-z0-9*]+(?:['’\-][A-Za-z0-9*]+)*")
 
 
 # Cleaner words for subtitles ("a cleaner word" style). Keys are normalized words/phrases.
