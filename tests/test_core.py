@@ -1471,3 +1471,21 @@ def test_paint_mask_moves_with_the_shape_and_clips_cover_every_frame(media_dir, 
     assert s["start_frame"] == int(np.ceil(4.6 * fps - 1e-3 * fps))
     last_blurred = int(np.ceil(7.0 * fps - 1e-3 * fps)) - 1
     assert s["start_frame"] + s["frames"] - 3 == last_blurred          # every frame up to the end, plus two spare empty ones
+
+
+def test_paint_follow_cursor_and_default_length():
+    from prude import paint
+    p = paint.new_patch(5.0, 5.0)
+    paint.add_stroke(p, 5.0, [(0.30, 0.50), (0.34, 0.50)], 0.04)
+    paint.include_frame(p, 5.0, 24.0)
+    assert paint.frame_count(p, 24.0) == 1                         # one frame until you play on
+    grab = paint.grab_offset(p, 5.0, 0.32, 0.50)
+    for n in range(1, 25):                                         # a second of "hold and drag to the right"
+        t = 5.0 + n / 24.0
+        paint.include_frame(p, t, 24.0)
+        paint.follow_to(p, t, 0.32 + n * 0.01, 0.50, grab)
+    assert paint.frame_count(p, 24.0) == 25
+    (r, pts), = paint.shape_at(p, 5.0 + 24 / 24.0)
+    assert pts[0] == pytest.approx((0.30 + 0.24, 0.50), abs=1e-6)  # the blur is where the cursor was
+    (r, pts), = paint.shape_at(p, 5.0 + 12 / 24.0)
+    assert pts[0] == pytest.approx((0.30 + 0.12, 0.50), abs=1e-6)

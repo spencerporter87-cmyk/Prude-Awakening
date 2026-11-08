@@ -5,7 +5,7 @@ import subprocess
 from dataclasses import asdict
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                                QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
@@ -702,7 +702,7 @@ class SceneRow(QFrame):
 class PaintRow(QFrame):
     """One painted blur in the Scenes list: tick it, change it, preview it, delete it."""
 
-    def __init__(self, patch, on_change, on_edit, on_see, on_delete):
+    def __init__(self, patch, on_change, on_edit, on_see, on_delete, fps=24.0):
         super().__init__()
         from .. import paint
         self.patch = patch
@@ -716,7 +716,9 @@ class PaintRow(QFrame):
         lay.addWidget(chk)
         a, b = paint.span(patch)
         lay.addWidget(label(f"🖌  {patch.get('label') or 'Painted blur'}", "H2"))
-        lay.addWidget(label(f"{fmt_time(a)} – {fmt_time(b)}  ·  {len(patch.get('keys') or [])} key frame(s)", "Small"))
+        nk = len(patch.get("keys") or [])
+        lay.addWidget(label(f"{fmt_time(a)} – {fmt_time(b)}  ·  {paint.frame_count(patch, fps)} frames  ·  "
+                            + (f"{nk} key position{'s' if nk != 1 else ''}" if nk else "stays in one place"), "Small"))
         lay.addStretch()
         lay.addWidget(button("✎ Edit", None, lambda: on_edit(patch), tip="Open it in the paint window"))
         lay.addWidget(button("🎬 Edited", "Link", lambda: on_see(
@@ -958,7 +960,7 @@ class ReviewPage(QWidget):
             self.scene_list.addWidget(label(f"Painted blurs ({len(painted)})", "H2"))
             for pt in painted:
                 self.scene_list.addWidget(PaintRow(pt, self._painted_changed, self._paint, self._see_edited,
-                                                   self._paint_delete))
+                                                   self._paint_delete, float(getattr(self.info, "fps", 24.0) or 24.0)))
             self.scene_list.addWidget(label("Scenes", "H2"))
         if not self.project.scenes:
             self.scene_list.addWidget(label(
@@ -1088,6 +1090,10 @@ class ReviewPage(QWidget):
                 lst.append(d.result)
             lst.sort(key=lambda x: x["start"])
             self._painted_changed()
+            from .. import paint
+            a, b = paint.span(d.result)                     # play it back for real, right away
+            QTimer.singleShot(150, lambda: self._see_edited(
+                {"start": a, "end": b, "label": d.result.get("label") or "Painted blur"}))
 
     def _painted_changed(self):
         self._fill_scenes()

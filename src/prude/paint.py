@@ -83,7 +83,6 @@ def add_stroke(patch, t, pts, radius=DEFAULT_RADIUS):
         patch["keys"] = []
     dx, dy, sc = transform(patch, t)
     patch["strokes"].append({"r": float(radius) / sc, "pts": [_to_local(patch, t, float(x), float(y)) for x, y in pts]})
-    lo, hi = span(patch)
     if t < patch["start"]:
         patch["start"] = float(t)
     if t > patch["end"]:
@@ -340,3 +339,24 @@ def include_frame(patch, t, fps):
 def aligned(t, fps):
     """The time of the frame at or just before t."""
     return max(0.0, int(float(t) * fps + 1e-6) / fps)
+
+
+def follow_to(patch, t, x, y, grab):
+    """Put the shape so the point you grabbed (picture fractions, offset `grab` from the shape's anchor spot
+    when you pressed) is at (x, y) at time t. Used for 'follow my cursor' while the frames play."""
+    if not patch.get("keys"):
+        set_key(patch, patch["start"], 0.0, 0.0, 1.0)
+    _dx, _dy, sc = transform(patch, t)
+    ax, ay = patch["anchor"]
+    set_key(patch, t, x - grab[0] - ax, y - grab[1] - ay, sc)
+
+
+def grab_offset(patch, t, x, y):
+    dx, dy, _sc = transform(patch, t)
+    ax, ay = patch["anchor"]
+    return (x - (ax + dx), y - (ay + dy))
+
+
+def frame_count(patch, fps):
+    a, b = span(patch)
+    return max(1, int(round((b - a) * fps)))

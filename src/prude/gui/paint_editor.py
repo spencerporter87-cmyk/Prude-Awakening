@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QHBo
 from .. import paint
 from .widgets import button, fmt_time, label
 
-WINDOW = 6.0            # seconds of frames loaded at a time
+WINDOW = 12.0           # seconds of frames loaded at a time
 
 
 class FrameBar(QWidget):
@@ -74,6 +74,8 @@ class Canvas(QWidget):
     moved = Signal(float, float)
     erased = Signal(float, float)
     scaled = Signal(float, float, float)
+    follow = Signal(float, float, bool)         # x, y, True when the button has just gone down
+    let_go = Signal()
 
     def __init__(self):
         super().__init__()
@@ -128,7 +130,7 @@ class Canvas(QWidget):
                 p.drawPoint(pts[0])
             for a, b in zip(pts, pts[1:]):
                 p.drawLine(a, b)
-        if self.cursor is not None and self.tool in ("paint", "erase"):
+        if self.cursor is not None and self.tool in ("paint", "erase", "follow"):
             p.setPen(QPen(QColor("#f59e0b"), 1.5))
             p.drawEllipse(self.cursor, self.radius * r.width(), self.radius * r.width())
         if self.note:
@@ -145,6 +147,8 @@ class Canvas(QWidget):
             self.live = [self.last]
         elif self.tool == "erase":
             self.erased.emit(*self.last)
+        elif self.tool == "follow":
+            self.follow.emit(self.last[0], self.last[1], True)
         self.update()
 
     def mouseMoveEvent(self, e):
@@ -159,6 +163,8 @@ class Canvas(QWidget):
                 self.moved.emit(cur[0] - self.last[0], cur[1] - self.last[1])
             elif self.tool == "erase":
                 self.erased.emit(*cur)
+            elif self.tool == "follow":
+                self.follow.emit(cur[0], cur[1], False)
             self.last = cur
         self.update()
 
@@ -166,6 +172,8 @@ class Canvas(QWidget):
         if self.tool == "paint" and self.live:
             pts, self.live = self.live, []
             self.stroke.emit(pts)
+        if self.tool == "follow" and self.last is not None:
+            self.let_go.emit()
         self.last = None
         self.update()
 
@@ -179,7 +187,7 @@ class Canvas(QWidget):
         steps = e.angleDelta().y() / 120.0
         if steps:
             fx, fy = self._frac(e.position())
-            if self.tool in ("move", "size"):
+            if self.tool in ("move", "follow"):
                 self.scaled.emit(1.06 ** steps, fx, fy)
             else:
                 self.radius = min(0.2, max(0.004, self.radius * 1.12 ** steps))
@@ -213,9 +221,11 @@ class PaintEditor(QDialog):
         lay.setSpacing(8)
         lay.addWidget(label("Paint a blur", "H2"))
         self.help = label(
-            "1. Pick Paint and scribble over what should be blurred.   2. Step to a later frame (← →). When it has "
-            "moved, pick Move and drag the shape onto it, or scroll to resize it: you only need a few key frames, "
-            "the blur glides between them.   3. Set where it starts and ends, then Save.", "Muted", wrap=True)
+            "Paint over what should be blurred (🖌 Paint), then press ▶ Play: the blur keeps going while it plays "
+            "and stops where you pause. To make it follow a person, pick ➜ Follow, then press and hold on the "
+            "blur and drag along with them: it plays while you hold and the blur goes where your mouse goes. "
+            "Fine tune with ← →, ✥ Move and the Starts / Ends buttons. Then Save and it plays back for real.",
+            "Muted", wrap=True)
         lay.addWidget(self.help)
         self.canvas = Canvas()
         lay.addWidget(self.canvas, 1)
@@ -226,7 +236,7 @@ class PaintEditor(QDialog):
         nav = QHBoxLayout()
         for text, step, tip in (("⏮", -10, "Back 10 frames"), ("◀", -1, "Back one frame (←)"),
                                 ("▶", 1, "Forward one frame (→)"), ("⏭", 10, "Forward 10 frames")):
-            nav.addWidget(button(text, None, lambda _=False, s=step: self._goto(self.i + s), tip=tip))
+            nav.addWidget(button(text, None, lambda _=False, s=step: self._step(s), tip=tip))
         self.play_btn = button("▶ Play", None, self._toggle_play, tip="Plays these frames at the speed on the right")
         nav.addWidget(self.play_btn)
         self.speed = QComboBox()
@@ -236,8 +246,8 @@ class PaintEditor(QDialog):
         nav.addWidget(self.speed)
         self.time_lab = label("", "Small")
         nav.addWidget(self.time_lab, 1)
-        nav.addWidget(button("⇤ 6 s earlier", None, lambda: self._load(self.t0 - WINDOW + 1.0)))
-        nav.addWidget(button("6 s later ⇥", None, lambda: self._load(self.t0 + WINDOW - 1.0)))
+        nav.addWidget(button(f"⇤ {int(WINDOW)} s earlier", None, lambda: self._load(self.t0 - WINDOW + 1.0)))
+        nav.addWidget(button(f"{int(WINDOW)} s later ⇥", None, lambda: self._load(self.t0 + WINDOW - 1.0)))
         lay.addLayout(nav)
 
         tools = QHBoxLayout()
@@ -245,6 +255,8 @@ class PaintEditor(QDialog):
         self.tool_btns = {}
         for key, text, tip in (("paint", "🖌 Paint", "Scribble over what should be blurred. Scroll to change the brush size."),
                                ("erase", "◌ Erase", "Rub out parts of the painted shape"),
+                               ("follow", "➜ Follow", "Press and hold on the blur, then drag along with the person: "
+                                                      "the frames play while you hold, and the blur goes where your mouse goes."),
                                ("move", "✥ Move", "Drag the painted shape to where it is on this frame. Scroll to resize it.")):
             b = QPushButton(text)
             b.setCheckable(True)
@@ -278,6 +290,11 @@ class PaintEditor(QDialog):
                               tip="The blur begins on the frame you're looking at"))
         span.addWidget(button("⇤ Ends on this frame", None, self._end_here,
                               tip="The blur stops after the frame you're looking at"))
+        self.auto = QCheckBox("Keep blurring as I go forward")
+        self.auto.setChecked(True)
+        self.auto.setToolTip("While on, stepping or playing forward makes the blur last until the frame you reach. "
+                             "Pressing 'Ends on this frame' turns it off.")
+        span.addWidget(self.auto)
         self.span_lab = label("", "Small")
         span.addWidget(self.span_lab, 1)
         span.addWidget(label("Name", "Small"))
@@ -298,8 +315,11 @@ class PaintEditor(QDialog):
         self.canvas.moved.connect(self._move)
         self.canvas.erased.connect(self._erase)
         self.canvas.scaled.connect(self._scale)
-        for seq, fn in (("Left", lambda: self._goto(self.i - 1)), ("Right", lambda: self._goto(self.i + 1)),
-                        ("Shift+Left", lambda: self._goto(self.i - 10)), ("Shift+Right", lambda: self._goto(self.i + 10)),
+        self.canvas.follow.connect(self._follow)
+        self.canvas.let_go.connect(self._stop_follow)
+        self._grab, self._cursor_at = None, None
+        for seq, fn in (("Left", lambda: self._step(-1)), ("Right", lambda: self._step(1)),
+                        ("Shift+Left", lambda: self._step(-10)), ("Shift+Right", lambda: self._step(10)),
                         ("Ctrl+Z", self._undo), ("Space", self._toggle_play)):
             QShortcut(QKeySequence(seq), self, activated=fn)
         self._loaded.connect(self._ready)
@@ -338,11 +358,16 @@ class PaintEditor(QDialog):
     def _t(self):
         return self.t0 + self.i / self.fps
 
-    def _goto(self, i):
+    def _goto(self, i, extend=False):
         if not self.frames:
             return
         self.i = max(0, min(len(self.frames) - 1, int(i)))
+        if extend and self.auto.isChecked() and self.patch["strokes"]:
+            paint.include_frame(self.patch, self._t(), self.fps)       # the blur lasts as far as you've gone
         self._show()
+
+    def _step(self, n):
+        self._goto(self.i + n, extend=0 < n <= 10)
 
     def _show(self):
         if not self.frames:
@@ -367,7 +392,7 @@ class PaintEditor(QDialog):
         fa, fb = (a - self.t0) * self.fps, (b - self.t0) * self.fps
         self.bar.set_state(n, self.i, max(0, fa), min(n, fb), keys)
         self.time_lab.setText(f"{fmt_time(t)}  ·  frame {int(round(t * self.fps))}")
-        self.span_lab.setText(f"Blurred from {fmt_time(a)} to {fmt_time(b)} ({(b - a):.2f} s)" if self.patch["strokes"]
+        self.span_lab.setText(f"Blurred from {fmt_time(a)} to {fmt_time(b)} ({paint.frame_count(self.patch, self.fps)} frames, {(b - a):.2f} s)" if self.patch["strokes"]
                               else "Paint something to begin")
 
     # ------------------------------------------------------------------ editing
@@ -392,6 +417,8 @@ class PaintEditor(QDialog):
         if not self.frames:
             return
         self._push()
+        if not self.patch["strokes"]:                       # the blur begins on the frame of the first stroke
+            self.patch["start"] = self.patch["end"] = self._t()
         paint.include_frame(self.patch, self._t(), self.fps)
         paint.add_stroke(self.patch, self._t(), pts, self.canvas.radius)
         paint.include_frame(self.patch, self._t(), self.fps)
@@ -445,6 +472,7 @@ class PaintEditor(QDialog):
         if self.frames and self.patch["strokes"]:
             self._push()
             self.patch["end"] = self._t() + 1.0 / self.fps
+            self.auto.setChecked(False)
             if self.patch["start"] >= self.patch["end"]:
                 self.patch["start"] = self._t()
             self._show()
@@ -466,8 +494,30 @@ class PaintEditor(QDialog):
     def _tick(self):
         if self.i >= len(self.frames) - 1:
             self._stop_play()
+            self._grab = None
             return
-        self._goto(self.i + 1)
+        self._goto(self.i + 1, extend=True)
+        if self._grab is not None and self._cursor_at is not None:
+            paint.follow_to(self.patch, self._t(), self._cursor_at[0], self._cursor_at[1], self._grab)
+            self._show()
+
+    def _follow(self, x, y, press):
+        if not (self.frames and self.patch["strokes"]):
+            return
+        self._cursor_at = (x, y)
+        if press:
+            self._push()
+            self._grab = paint.grab_offset(self.patch, self._t(), x, y)
+            paint.include_frame(self.patch, self._t(), self.fps)
+            paint.follow_to(self.patch, self._t(), x, y, self._grab)
+            if not self._playing:
+                self._toggle_play()
+
+    def _stop_follow(self):
+        self._grab = None
+        self._cursor_at = None
+        self._stop_play()
+        self._show()
 
     # ------------------------------------------------------------------ finishing
     def accept(self):
