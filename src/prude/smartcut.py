@@ -75,7 +75,7 @@ def copy_parts(info, kept, work: Path, cancel=None):
             from .media import Cancelled
             raise Cancelled()
         seg = work / f"part{i:04d}.mkv"
-        start = s + info.format_start
+        start = s                  # FFmpeg's -ss counts from the start of the file's own timeline already
         cmd = [ffmpeg(), "-v", "error", "-nostdin", "-y"]
         if s > 0:
             # FFmpeg seeks a little before the time asked for, to the keyframe before; asking for

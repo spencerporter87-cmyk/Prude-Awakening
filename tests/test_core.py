@@ -1582,3 +1582,55 @@ def test_track_is_fast_on_long_empty_stretches_and_ranges_dont_wipe_each_other(t
     parked = [ln for ln in cmd.read_text().splitlines() if "x 0, drawbox@s0 y 0, drawbox@s0 w 1, drawbox@s0 h 1" in ln
               and 5.0 < float(ln.split(" ", 1)[0]) < 5.4]
     assert not parked and times == sorted(times)
+
+
+# ---------------------------------------------------------------- bug hunt 3
+def test_movie_names_with_percent_signs_dont_break_frame_files(media_dir, tmp_path):
+    from prude import blurparts, paint
+    info = probe(media_dir / "movie51.mkv")
+
+    class Always:
+        def boxes(self, image_path):
+            return [(10.0, 10.0, 80.0, 60.0)]
+
+    odd = tmp_path / "Movie 50% (clean) #1 %d"
+    got = blurparts.detect(info, [(1.0, 3.0)], ["FEMALE_BREAST_EXPOSED"], odd, detector=Always())
+    assert got and all(b for _t, b in got)
+    assert len(paint.extract_frames(info, 1.0, 2.0, tmp_path / "frames 100%")) >= 20
+
+
+def test_atomic_writes_survive_a_brief_file_lock(tmp_path, monkeypatch):
+    import os
+    from prude import paths
+    real, calls = os.replace, {"n": 0}
+
+    def flaky(a, b):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise PermissionError("held by the virus scanner")
+        return real(a, b)
+    monkeypatch.setattr(paths.os, "replace", flaky)
+    paths.write_atomic(tmp_path / "x.json", "{}")
+    assert (tmp_path / "x.json").read_text() == "{}" and calls["n"] == 3
+
+
+def test_ffmpeg_seeks_are_not_pushed_by_the_files_start_offset(tmp_path, monkeypatch):
+    """FFmpeg's -ss already counts from the start of a file's own clock (a transport stream starts ~1.4 s in),
+    so adding that offset again looks at the wrong moment."""
+    import subprocess
+    from prude import replace
+    from prude.media import ffmpeg
+    src = tmp_path / "late.ts"
+    subprocess.run([ffmpeg(), "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=160x90:r=24:d=6", "-f", "lavfi", "-i",
+                    "sine=d=6", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-f", "mpegts", str(src)], check=True)
+    info = probe(src)
+    assert info.format_start > 1.0
+    seen = []
+
+    class R:
+        stdout, stderr, returncode = b"", b"", 0
+
+    monkeypatch.setattr(replace.subprocess, "run", lambda cmd, **k: (seen.append(cmd), R())[1])
+    replace.actor_voice(info, 0, 3.0, 4.0, window=0.5)
+    cmd = seen[0]
+    assert float(cmd[cmd.index("-ss") + 1]) == 2.5

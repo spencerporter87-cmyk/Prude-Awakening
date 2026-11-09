@@ -1077,7 +1077,8 @@ class ReviewPage(QWidget):
             return
         patch = patch if isinstance(patch, dict) else None
         at = float(patch["start"]) if patch else self.player.position()
-        self.player.player.pause()
+        if HAVE_MM:
+            self.player.player.pause()
         from .paint_editor import PaintEditor
         d = PaintEditor(self.project, self.info, at, patch, self)
         if d.exec() and d.result:

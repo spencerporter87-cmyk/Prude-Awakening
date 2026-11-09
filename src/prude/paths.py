@@ -3,6 +3,7 @@
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 from . import APP_ID
@@ -19,7 +20,14 @@ def write_atomic(path, text: str):
     path = Path(path)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    for attempt in range(8):             # on Windows an antivirus or indexer can hold the file for a moment
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == 7:
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 
 def bundle_dir() -> Path:
@@ -106,3 +114,9 @@ def free_space_gb(path: Path) -> float:
         return shutil.disk_usage(p).free / 1e9
     except OSError:
         return 0.0
+
+
+def seq_pattern(folder, pattern):
+    """`folder/pattern` for an FFmpeg image sequence ("%06d.jpg"). FFmpeg reads every % in the whole path as a
+    number placeholder, so a folder named after a movie with "50%" in its title has to have its % doubled."""
+    return str(folder).replace("%", "%%") + os.sep + pattern

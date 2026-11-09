@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .paths import seq_pattern
 from .media import Cancelled, ffmpeg, run_ffmpeg
 
 FPS = 8                      # how often the subtitles are checked (1/8 s timing)
@@ -92,7 +93,7 @@ def subtitle_frames(info, stream, out_dir: Path, progress=None, cancel=None):
     cmd = [ffmpeg(), "-hide_banner", "-y", "-f", "lavfi", "-i",
            f"color=c=black:s={w}x{h}:r={FPS}:d={info.duration:.3f}", "-i", str(info.path),
            "-filter_complex", graph, "-map", "[v]", "-fps_mode", "passthrough", "-frame_pts", "1",
-           str(out_dir / "%d.png")]
+           seq_pattern(out_dir, "%d.png")]
     run_ffmpeg(cmd, info.duration, progress, cancel, "Finding the subtitles")
     frames = []
     for p in out_dir.glob("*.png"):

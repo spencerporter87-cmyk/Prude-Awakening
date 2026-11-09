@@ -8,6 +8,7 @@ are untouched."""
 import shutil
 from pathlib import Path
 
+from .paths import seq_pattern
 from .media import Cancelled, ffmpeg, run
 
 SAMPLE_FPS = 10          # detections per second inside blurred scenes
@@ -168,7 +169,7 @@ def detect(info, ranges, classes, work_dir: Path, progress=None, cancel=None, de
         r = run([ffmpeg(), "-y", "-loglevel", "error", "-ss", f"{a:.3f}", "-i", str(info.path),
                  "-t", f"{b - a:.3f}", "-map", "0:v:0", "-an", "-sn", "-vf",
                  f"{tone}fps={SAMPLE_FPS},scale='min({FRAME_W},iw)':-2,format=yuvj420p", "-q:v", "3",
-                 str(d / "%06d.jpg")])
+                 seq_pattern(d, "%06d.jpg")])
         if r.returncode != 0:
             continue
         frames = sorted(d.glob("*.jpg"))

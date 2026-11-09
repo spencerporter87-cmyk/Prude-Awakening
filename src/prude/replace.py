@@ -104,7 +104,7 @@ def pitch_and_level(x, sr):
 def actor_voice(info, track, start, end, mutes=(), window=6.0):
     """Pitch, loudness and gender guess of the speaker around (start, end), skipping silenced words."""
     a = max(0.0, start - window)
-    r = subprocess.run([ffmpeg(), "-v", "error", "-nostdin", "-ss", f"{a + info.format_start:.3f}",
+    r = subprocess.run([ffmpeg(), "-v", "error", "-nostdin", "-ss", f"{a:.3f}",
                         "-t", f"{end + window - a:.3f}", "-i", str(info.path), "-map", f"0:a:{track}",
                         "-ac", "1", "-ar", "16000", "-f", "s16le", "-"],
                        capture_output=True, creationflags=NO_WINDOW)

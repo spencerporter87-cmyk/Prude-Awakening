@@ -2,7 +2,6 @@
 closing the app. Jobs run one at a time (the graphics card does one heavy thing at once)."""
 
 import json
-import os
 import re
 import threading
 import time
@@ -12,7 +11,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .media import VIDEO_EXTS, Cancelled, pick_audio_track, probe
-from .paths import app_data_dir
+from .paths import app_data_dir, write_atomic
 from .render import paint_in_use
 
 QUEUED, RUNNING, REVIEW, DONE, FAILED, CANCELLED = (
@@ -100,9 +99,7 @@ class Queue:
 
     def save(self):
         with self.lock:
-            tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps({"jobs": [asdict(j) for j in self.jobs]}), encoding="utf-8")
-            os.replace(tmp, self.path)
+            write_atomic(self.path, json.dumps({"jobs": [asdict(j) for j in self.jobs]}))
 
     # ------------------------------------------------------------ changes
     def add(self, sources, preset, filters, export, mode="save"):

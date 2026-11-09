@@ -19,6 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .paths import seq_pattern
 from .media import Cancelled, MediaError, ffmpeg
 from .paths import NO_WINDOW
 
@@ -275,6 +276,11 @@ def filter_graph(info, segs, first_input, src):
 
 
 # ------------------------------------------------------------------ frames for the editor
+def _tonemap(info):
+    from .blurparts import _tonemap as tm        # HDR pictures are brought to normal brightness first
+    return tm(info)
+
+
 def extract_frames(info, t0, t1, out_dir, width=960, cancel=None):
     """Every frame between t0 and t1 as small JPEGs (frame i is at t0 + i / fps). Returns the file list."""
     from .media import run
@@ -283,8 +289,8 @@ def extract_frames(info, t0, t1, out_dir, width=960, cancel=None):
     for old in out_dir.glob("*.jpg"):
         old.unlink(missing_ok=True)
     r = run([ffmpeg(), "-y", "-loglevel", "error", "-ss", f"{max(0.0, t0):.3f}", "-t", f"{max(0.1, t1 - t0):.3f}",
-             "-i", str(info.path), "-map", "0:v:0", "-an", "-sn", "-vf", f"fps={_rate(info)},scale={width}:-2",
-             "-q:v", "3", str(out_dir / "%05d.jpg")])
+             "-i", str(info.path), "-map", "0:v:0", "-an", "-sn", "-vf", f"{_tonemap(info)}fps={_rate(info)},scale={width}:-2,format=yuvj420p",
+             "-q:v", "3", seq_pattern(out_dir, "%05d.jpg")])
     if r.returncode != 0:
         raise MediaError(f"Couldn't read the frames: {(r.stderr or '')[-200:]}")
     return sorted(out_dir.glob("*.jpg"))

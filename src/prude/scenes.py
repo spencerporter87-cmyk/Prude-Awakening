@@ -8,6 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from . import models
+from .paths import seq_pattern
 from .media import Cancelled, ffmpeg, run, run_ffmpeg
 from .nsfw import NsfwClassifier
 
@@ -113,7 +114,7 @@ def extract_frames(info, frames_dir: Path, progress=None, cancel=None, fps=FPS):
                "tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv")
     vf += ",format=yuvj420p"
     cmd = [ffmpeg(), "-y", "-hwaccel", "auto", "-i", str(info.path), "-map", "0:v:0",
-           "-an", "-sn", "-dn", "-vf", vf, "-q:v", "5", str(frames_dir / "%06d.jpg")]
+           "-an", "-sn", "-dn", "-vf", vf, "-q:v", "5", seq_pattern(frames_dir, "%06d.jpg")]
     try:
         run_ffmpeg(cmd, info.duration, progress, cancel, "Watching the movie")
     except Exception:
