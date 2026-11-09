@@ -449,9 +449,17 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
         from . import models
         big = models.nudenet_640_path(settings.models_path) if models.nudenet_640_ready(settings.models_path) else None
         grow = blurparts.GROW.get(getattr(filters, "blur_size", "normal"), blurparts.GROW["normal"])
+        checker = None
+        if models.nsfw_ready(settings.models_path):
+            try:
+                from .nsfw import NsfwClassifier
+                checker = NsfwClassifier(models.nsfw_dir(settings.models_path) / models.NSFW_FILES[0])
+            except Exception as e:                                 # noqa: BLE001 - the third opinion is optional
+                log(f"Couldn't load the whole-picture checker for blurring: {e}")
+        tmp_dirs.append(out.parent / f".{out.stem}.prude-blur")
         samples = blurparts.detect(info, parts, classes, out.parent / f".{out.stem}.prude-blur",
                                    (lambda f, m: progress(0.03 * f, m)) if progress else None, cancel,
-                                   model=big)
+                                   model=big, checker=checker)
         found = [(a, b) for a, b in parts if any(a - 0.5 <= t <= b + 0.5 and bx for t, bx in samples)]
         missing = [r for r in parts if r not in found]
         if missing:

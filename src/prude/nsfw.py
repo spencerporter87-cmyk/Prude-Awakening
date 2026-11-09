@@ -25,9 +25,10 @@ class NsfwClassifier:
         self.input = self.sess.get_inputs()[0].name
 
     def _prep(self, path):
+        """A file path, or a picture already in memory (BGR, as OpenCV reads it)."""
         import cv2
         import numpy as np
-        img = cv2.imread(str(path))
+        img = path if isinstance(path, np.ndarray) else cv2.imread(str(path))
         if img is None:
             return np.zeros((3, self.size, self.size), np.float32)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)

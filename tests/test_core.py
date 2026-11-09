@@ -1312,8 +1312,10 @@ def test_blur_covers_the_edges_and_blinks(media_dir, fake_words, tmp_path, monke
             pass
 
         def boxes(self, image_path):
+            import cv2
             t = 3.0 + (int(Path(image_path).stem) - 1) / blurparts.SAMPLE_FPS     # the range starts at 4 - 1 s margin
-            return [(40.0, 30.0, 120.0, 90.0)] if 3.5 <= t <= 8.3 and not 5.0 <= t < 5.3 else []
+            k = cv2.imread(str(image_path)).shape[1] / 640.0                      # the boxes below are for a 640-wide picture
+            return [(40.0 * k, 30.0 * k, 120.0 * k, 90.0 * k)] if 3.5 <= t <= 8.3 and not 5.0 <= t < 5.3 else []
 
     monkeypatch.setattr(blurparts, "Detector", Mover)
     f = FilterOptions(words=[], scenes=["nude_f_breasts"], blur_margin=1.0)
@@ -1489,3 +1491,94 @@ def test_paint_follow_cursor_and_default_length():
     assert pts[0] == pytest.approx((0.30 + 0.24, 0.50), abs=1e-6)  # the blur is where the cursor was
     (r, pts), = paint.shape_at(p, 5.0 + 12 / 24.0)
     assert pts[0] == pytest.approx((0.30 + 0.12, 0.50), abs=1e-6)
+
+
+# ---------------------------------------------------------------- body-part blur: second bug hunt
+def _wide_clip(tmp_path, secs=3, with_bars=True):
+    """A 2.39:1 picture inside black bars, grey with a small white 'target' at x=900..960, y=200..260 of the
+    1280x536 picture (so at y=292..352 of the 1280x720 frame)."""
+    import subprocess
+    out = tmp_path / "wide.mkv"
+    vf = "drawbox=x=900:y=200:w=60:h=60:color=white:t=fill"
+    if with_bars:
+        vf += ",pad=1280:720:0:92:black"
+    subprocess.run([ffmpeg_path(), "-y", "-v", "error", "-f", "lavfi", "-i",
+                    f"color=c=0x606060:s=1280x536:r=24:d={secs}", "-vf", vf, "-pix_fmt", "yuv420p", str(out)],
+                   check=True)
+    return out
+
+
+def ffmpeg_path():
+    from prude.media import ffmpeg
+    return ffmpeg()
+
+
+def test_content_rect_finds_letterbox_bars_but_not_dark_scenes():
+    import numpy as np
+    from prude import blurparts
+    pic = np.full((720, 1280, 3), 90, np.uint8)
+    pic[:92] = 0
+    pic[-92:] = 0
+    assert blurparts.content_rect([pic]) == (0, 92, 1280, 628)
+    dark = np.full((720, 1280, 3), 8, np.uint8)                    # a night scene is not a bar
+    assert blurparts.content_rect([dark]) == (0, 0, 1280, 720)
+    mixed = [dark, pic]                                            # judged over several frames
+    assert blurparts.content_rect(mixed) == (0, 92, 1280, 628)
+    assert blurparts.views(1280, 536)[1:] == [(0, 0, 768, 536), (512, 0, 768, 536)]
+    assert blurparts.views(1000, 750) == [(0, 0, 1000, 750)]
+
+
+def test_small_parts_in_a_widescreen_film_are_found_by_looking_closer(tmp_path):
+    from pathlib import Path as P
+    import cv2
+    from prude import blurparts
+    clip = _wide_clip(tmp_path)
+
+    class NeedsABigTarget:                       # a detector that can't see a part smaller than 6% of the picture's width
+        def boxes(self, image_path):
+            img = cv2.imread(str(image_path))
+            g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            ys, xs = (g > 230).nonzero()
+            if not len(xs):
+                return []
+            x, y, w, h = xs.min(), ys.min(), xs.max() - xs.min() + 1, ys.max() - ys.min() + 1
+            return [(float(x), float(y), float(w), float(h))] if w / img.shape[1] >= 0.06 else []
+
+    info = probe(clip)
+    got = blurparts.detect(info, [(0.0, 2.5)], ["FEMALE_BREAST_EXPOSED"], tmp_path / "w", detector=NeedsABigTarget())
+    assert got and all(boxes for _t, boxes in got)                  # seen in every sample...
+    x, y, w, h = got[0][1][0]
+    assert 880 <= x <= 920 and 285 <= y <= 305 and 50 <= w <= 80 and 50 <= h <= 80   # ...in the right place of the real frame
+
+
+def test_third_opinion_locates_what_the_detectors_missed():
+    import numpy as np
+    from prude import blurparts
+    img = np.full((360, 640, 3), 100, np.uint8)
+    img[150:210, 400:460] = 255                                     # the explicit area
+
+    class Checker:                                                   # explicit only while the bright area is visible
+        def probs(self, imgs):
+            return np.array([0.05 + 0.9 * ((im[150:210, 400:460] > 200).mean()) for im in imgs])
+
+    (x, y, w, h), = blurparts.locate_with_checker(Checker(), img)
+    assert x <= 400 and y <= 150 and x + w >= 460 and y + h >= 210    # it covers the area...
+    assert w < 640 / 2 and h < 360 / 2                                # ...and not the whole picture
+    assert blurparts.locate_with_checker(Checker(), np.full((360, 640, 3), 100, np.uint8)) == []   # nothing explicit: nothing
+
+
+def test_track_is_fast_on_long_empty_stretches_and_ranges_dont_wipe_each_other(tmp_path):
+    import time
+    from prude import blurparts
+    t0 = time.time()
+    out = blurparts.track([(i / 10, []) for i in range(30000)])
+    assert time.time() - t0 < 2.0 and not any(b for _t, b in out)
+    box = (10.0, 10.0, 50.0, 50.0)
+    cmd = tmp_path / "x.cmd"
+    # two scenes 0.08 s apart: nothing may blank the picture between them
+    s = [(i / 10, [box]) for i in range(0, 51)] + [(5.1 + i / 10, [box]) for i in range(0, 41)]
+    blurparts.write_commands(cmd, s, [(0.0, 5.0), (5.08, 9.2)], 640, 360)
+    times = [float(ln.split(" ", 1)[0]) for ln in cmd.read_text().splitlines()]
+    parked = [ln for ln in cmd.read_text().splitlines() if "x 0, drawbox@s0 y 0, drawbox@s0 w 1, drawbox@s0 h 1" in ln
+              and 5.0 < float(ln.split(" ", 1)[0]) < 5.4]
+    assert not parked and times == sorted(times)
