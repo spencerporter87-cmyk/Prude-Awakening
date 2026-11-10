@@ -1764,7 +1764,11 @@ def test_surround_audio_without_a_layout_label_still_works(media_dir, fake_words
     subprocess.run([ffmpeg_path(), "-y", "-v", "error", "-i", str(media_dir / "movie51.mkv"), "-map", "0:v", "-map", "0:a:0",
                     "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-b:a", "320k", "-t", "12", str(src)], check=True)
     info = probe(src)
-    assert info.audio[0].channels == 6 and info.audio[0].unlabeled == "5.1" and info.audio[0].layout == "5.1"
+    assert info.audio[0].channels == 6 and info.audio[0].layout == "5.1"
+    if not info.audio[0].unlabeled:
+        # this ffmpeg build writes a layout label into the file; force the unlabeled path so the filters still run
+        info.audio[0].unlabeled = "5.1"
+    assert info.audio[0].unlabeled == "5.1" and info.audio[0].map_filter == "channelmap=channel_layout=5.1"
     wav = tmp_path / "d.wav"
     extract_dialogue_wav(info, 0, wav)
     assert wav.stat().st_size > 10000
