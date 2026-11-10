@@ -158,13 +158,13 @@ class SettingsDialog(QDialog):
         self.space.setText(f"{free_space_gb(p):.1f} GB free there. The models need about 4 GB.")
 
     def _clear_cache(self):
-        import shutil
+        from ..project import clear_all_scans
         if QMessageBox.question(self, "Clear saved scans",
-                                "Forget every saved scan? Movies will need to be scanned again.") \
+                                "Forget every saved scan? Movies will need to be scanned again.\n\n"
+                                "Blurs you painted and scenes or words you added yourself are kept.") \
                 == QMessageBox.Yes:
-            shutil.rmtree(projects_dir(), ignore_errors=True)
-            projects_dir()
-            self.cache_lbl.setText("0.00 GB used by saved scans")
+            clear_all_scans()
+            self.cache_lbl.setText(f"{folder_size_gb(projects_dir()):.2f} GB used by saved scans")
 
     def _save(self):
         s = self.s

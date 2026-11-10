@@ -22,8 +22,20 @@ def parse_srt_time(s):
     return int(h) * 3600 + int(m) * 60 + int(sec) + int(ms[:3].ljust(3, "0")) / 1000
 
 
+def read_text_any(path):
+    """Subtitle files come in many encodings. UTF-8 (with or without a BOM) and UTF-16 are read as such; anything
+    else is almost always Windows-1252 (accents like é, curly quotes), not UTF-8 with errors."""
+    data = Path(path).read_bytes()
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16", errors="replace")
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return data.decode("cp1252", errors="replace")
+
+
 def read_srt(path):
-    raw = Path(path).read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+    raw = read_text_any(path).replace("\r\n", "\n").replace("\r", "\n")
     cues = []
     for block in re.split(r"\n\s*\n", raw.strip()):
         lines = block.split("\n")

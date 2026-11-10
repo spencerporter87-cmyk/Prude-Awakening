@@ -327,6 +327,9 @@ class PaintEditor(QDialog):
 
     # ------------------------------------------------------------------ frames
     def _load(self, t0):
+        if getattr(self, "_loading", False):                 # one set of frames at a time: they share a folder
+            return
+        self._loading = True
         self._stop_play()
         t0 = max(0.0, min(float(t0), max(0.0, float(self.info.duration) - 1.0)))
         t0 = round(t0 * self.fps) / self.fps
@@ -344,6 +347,7 @@ class PaintEditor(QDialog):
         threading.Thread(target=work, daemon=True).start()
 
     def _ready(self, res, err):
+        self._loading = False
         if not res:
             self.status.setText("Couldn't read the frames: " + err[-250:])
             return

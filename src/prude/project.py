@@ -34,6 +34,40 @@ def _plain(o):
     return str(o)
 
 
+def _by_hand(d: dict) -> dict:
+    """The parts of a saved project that came from the person, not from a scan."""
+    keep = {"source": d.get("source", ""), "paint": d.get("paint") or []}
+    keep["scenes"] = [x for x in d.get("scenes") or [] if x.get("manual") or x.get("origin") == "manual"]
+    keep["mutes"] = [x for x in d.get("mutes") or [] if x.get("manual") or x.get("origin") == "manual"]
+    return keep
+
+
+def _clear_dir(folder: Path):
+    """Empty one project's folder but keep painted blurs and scenes/words you added yourself."""
+    keep = {}
+    f = Path(folder) / "project.json"
+    try:
+        if f.exists():
+            keep = _by_hand(json.loads(f.read_text(encoding="utf-8")))
+    except Exception:                                   # noqa: BLE001 - unreadable: nothing to keep
+        keep = {}
+    shutil.rmtree(folder, ignore_errors=True)
+    if any(keep.get(k) for k in ("paint", "scenes", "mutes")):
+        Path(folder).mkdir(parents=True, exist_ok=True)
+        write_atomic(Path(folder) / "project.json", json.dumps(keep))
+
+
+def clear_all_scans():
+    """Clear every saved scan; hand-made work (painted blurs, scenes and words you added) stays."""
+    root = projects_dir()
+    for d in list(root.iterdir()) if root.exists() else []:
+        if d.is_dir():
+            _clear_dir(d)
+        else:
+            d.unlink(missing_ok=True)
+    projects_dir()
+
+
 def project_key(path: Path) -> str:
     st = path.stat()
     h = hashlib.sha1(f"{path.resolve()}|{st.st_size}|{int(st.st_mtime)}".encode("utf-8"))
@@ -89,7 +123,8 @@ class Project:
         return t.get("track") == track and (bool(t.get("words")) or bool(t.get("skipped")))
 
     def clear_cache(self):
-        shutil.rmtree(self.dir, ignore_errors=True)
+        """Forget the scan (transcript, frames, found words and scenes) but keep what you made by hand."""
+        _clear_dir(self.dir)
 
     def active_mutes(self):
         return [m for m in self.mutes if m.get("on", True)]

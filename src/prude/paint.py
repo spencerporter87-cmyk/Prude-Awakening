@@ -249,14 +249,23 @@ def filter_graph(info, segs, first_input, src):
     alpha_fmt = "yuva420p10le" if ten else "yuva420p"
     mask_fmt = "gray10le" if ten else "gray"
     fps = info.fps
+    # Frame timestamps in a file are rounded (to the millisecond in .mkv), so the picture and the mask could
+    # disagree by a frame about which frame is which. Snapping both to the exact frame grid makes the blur land on
+    # the frame you picked. (Not for variable-frame-rate files, where there is no grid.)
+    cfr = (info.video.get("r_frame_rate") or rate) == (info.video.get("avg_frame_rate") or rate)
+    # one clock for both: a timebase of exactly one frame, so frame number N is pts N for the picture and the
+    # mask alike (no container rounding, no float truncation)
+    num, _, den = str(rate).partition("/")
+    snap = f"settb={den or 1}/{num},setpts=N," if cfr else ""
+    norm = snap
     pieces, parts, at = [], [], 0          # at = next frame number the mask should be on
     for j, s in enumerate(segs):
         gap = s["start_frame"] - at
         if gap > 0:
             pieces.append(f"color=c=black:s={W}x{H}:r={rate}:d={(gap - 0.5) / fps:.5f},format=gray,setsar={sar}[pg{j}]")
             parts.append(f"[pg{j}]")
-        pieces.append(f"[{first_input + j}:v:0]format=gray,setpts=PTS-STARTPTS,scale={W}:{H}:flags=bilinear,"
-                      f"setsar={sar},format=gray[pm{j}]")
+        pieces.append(f"[{first_input + j}:v:0]{snap or 'setpts=PTS-STARTPTS,'}format=gray,"
+                      f"scale={W}:{H}:flags=bilinear,setsar={sar},format=gray[pm{j}]")
         parts.append(f"[pm{j}]")
         at = s["start_frame"] + s["frames"]
     tail = max(1, int(round((info.duration + 2) * fps)) - at)
@@ -264,8 +273,8 @@ def filter_graph(info, segs, first_input, src):
     parts.append("[pgt]")
     enable = "+".join(f"between(t,{max(0.0, s['start'] - 0.2):.3f},{s['end'] + 0.2:.3f})" for s in segs)
     graph = pieces + [
-        f"{''.join(parts)}concat=n={len(parts)}:v=1:a=0,format={mask_fmt}[ppmask]",
-        f"{src}split=2[ppmain][ppcopy]",
+        f"{''.join(parts)}concat=n={len(parts)}:v=1:a=0,{snap}format={mask_fmt}[ppmask]",
+        f"{src}{norm}split=2[ppmain][ppcopy]",
         f"[ppcopy]boxblur=luma_radius='min(w,h)/18':luma_power=4:chroma_radius='min(cw,ch)/18':"
         f"chroma_power=4:enable='{enable}',format={alpha_fmt}[ppblur]",
         "[ppblur][ppmask]alphamerge[ppblurred]",

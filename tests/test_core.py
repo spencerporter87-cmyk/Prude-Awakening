@@ -1634,3 +1634,121 @@ def test_ffmpeg_seeks_are_not_pushed_by_the_files_start_offset(tmp_path, monkeyp
     replace.actor_voice(info, 0, 3.0, 4.0, window=0.5)
     cmd = seen[0]
     assert float(cmd[cmd.index("-ss") + 1]) == 2.5
+
+
+@pytest.mark.parametrize("ext,rate", [("mkv", "24000/1001"), ("mp4", "60000/1001"), ("ts", "25")])
+def test_painted_blur_is_frame_exact_in_every_container_and_rate(ext, rate, tmp_path, fake_words):
+    """File timestamps are rounded differently by .mkv, .mp4 and .ts; the painted blur still has to start and
+    stop on exactly the frames chosen."""
+    import math
+    import subprocess
+    import cv2
+    from prude import paint
+    src = tmp_path / f"s.{ext}"
+    subprocess.run([ffmpeg_path(), "-y", "-v", "error", "-f", "lavfi", "-i", f"testsrc2=s=640x360:r={rate}:d=8",
+                    "-f", "lavfi", "-i", "sine=f=440:d=8", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                    "-f", {"mkv": "matroska", "mp4": "mp4", "ts": "mpegts"}[ext], str(src)], check=True)
+    fps = probe(src).fps
+    p = _project(src, fake_words)
+    spans = [(2.37, 3.1), (5.01, 6.3)]
+    p.paint = []
+    for a, b in spans:
+        pa = paint.new_patch(a, b)
+        paint.add_stroke(pa, a, [(0.3, 0.5), (0.5, 0.5)], 0.08)
+        p.paint.append(pa)
+    out = tmp_path / "o.mkv"
+    res = pipeline.render_project(p, FilterOptions(words=[], scenes=[]), Settings(device="cpu"), out)
+    assert res["valid"], res["problems"]
+    sh = lambda a: cv2.Laplacian(a, cv2.CV_64F).var()            # noqa: E731
+    cs, co = cv2.VideoCapture(str(src)), cv2.VideoCapture(str(out))
+    flags = []
+    while True:
+        ok1, a = cs.read()
+        ok2, b = co.read()
+        if not (ok1 and ok2):
+            break
+        ga, gb = [cv2.cvtColor(x, cv2.COLOR_BGR2GRAY).astype(float)[150:210, 190:320] for x in (a, b)]
+        flags.append(sh(gb) < 0.35 * sh(ga))
+    runs = []
+    for i, f in enumerate(flags):
+        if f and (i == 0 or not flags[i - 1]):
+            runs.append([i, i])
+        if f:
+            runs[-1][1] = i
+    want = [[math.ceil(a * fps - 1e-3 * fps), math.ceil(b * fps - 1e-3 * fps) - 1] for a, b in spans]
+    assert runs == want
+
+
+def test_painted_blur_lands_on_the_right_frames_after_a_cut(media_dir, fake_words, tmp_path):
+    import cv2
+    from prude import paint
+    src = media_dir / "movie51.mkv"
+    info = probe(src)
+    fps = info.fps
+    p = _project(src, fake_words)
+    p.scenes = [{"id": "c", "kind": "violence", "label": "cut", "start": 2.0, "end": 3.0, "on": True, "action": "cut"}]
+    pa = paint.new_patch(5.0, 6.0)
+    paint.add_stroke(pa, 5.0, [(0.10, 0.25), (0.22, 0.25)], 0.06)
+    p.paint = [pa]
+    out = tmp_path / "cutpaint.mkv"
+    res = pipeline.render_project(p, FilterOptions(words=[], scenes=[]), Settings(device="cpu"), out)
+    assert res["valid"], res["problems"]
+    assert probe(out).duration == pytest.approx(info.duration - 1.0, abs=0.2)
+
+    def sharp_at(path, n):
+        cap = cv2.VideoCapture(str(path))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, n)
+        ok, img = cap.read()
+        assert ok
+        g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(float)
+        H, W = g.shape
+        return cv2.Laplacian(g[int(H * 0.2):int(H * 0.3), int(W * 0.12):int(W * 0.20)], cv2.CV_64F).var()
+
+    first = int(round(4.0 * fps))                   # the second a cut removed: 5.0-6.0 in the movie is 4.0-5.0 in the copy
+    assert sharp_at(out, first + 2) < 0.35 * sharp_at(src, first + 2 + int(round(fps)))
+    assert sharp_at(out, first - 3) > 0.7 * sharp_at(src, first - 3 + int(round(fps)))
+    assert sharp_at(out, first + int(round(fps)) + 3) > 0.7 * sharp_at(src, first + 2 * int(round(fps)) + 3)
+
+
+def test_clearing_saved_scans_keeps_what_you_made_by_hand(media_dir, fake_words):
+    from prude import paint
+    from prude.project import Project, clear_all_scans
+    src = media_dir / "movie51.mkv"
+    p = _project(src, fake_words)
+    pa = paint.new_patch(5.0, 6.0)
+    paint.add_stroke(pa, 5.0, [(0.3, 0.5)], 0.05)
+    p.paint = [pa]
+    p.scenes = [{"id": "a", "start": 1, "end": 2, "kind": "nudity", "on": True, "origin": "auto"},
+                {"id": "m", "start": 3, "end": 4, "kind": "manual", "on": True, "origin": "manual", "manual": True}]
+    p.mutes = [{"id": "w", "start": 1, "end": 1.2, "on": True, "origin": "auto"}]
+    p.save()
+    (p.dir / "frames").mkdir()
+    (p.dir / "frames" / "x.jpg").write_bytes(b"x")
+    p.clear_cache()
+    q = Project.open(src)
+    assert [x["id"] for x in q.paint] == [pa["id"]] and [x["id"] for x in q.scenes] == ["m"] and q.mutes == []
+    assert not (q.dir / "frames").exists() and not q.transcript
+    clear_all_scans()                                              # the Settings button
+    q = Project.open(src)
+    assert q.paint and [x["id"] for x in q.scenes] == ["m"]
+    q.paint = []
+    q.scenes = []
+    q.save()
+    clear_all_scans()
+    assert not any((d / "project.json").exists() for d in __import__("prude.paths", fromlist=["x"]).projects_dir().iterdir())
+
+
+def test_subtitle_files_in_other_encodings_keep_their_accents(tmp_path):
+    from prude.subtitles import read_srt
+    body = "1\r\n00:00:01,000 --> 00:00:02,500\r\nCafé, señor – “hello”\r\n\r\n2\r\n00:00:03,000 --> 00:00:04,000\r\nSecond\r\n"
+    cases = {"utf8.srt": body.encode("utf-8"), "bom.srt": b"\xef\xbb\xbf" + body.encode("utf-8"),
+             "win.srt": body.encode("cp1252"), "u16.srt": b"\xff\xfe" + body.encode("utf-16-le")}
+    for name, raw in cases.items():
+        f = tmp_path / name
+        f.write_bytes(raw)
+        cues = read_srt(f)
+        assert len(cues) == 2 and cues[0][2] == "Café, señor – “hello”" and cues[1][2] == "Second", name
+        assert cues[0][0] == 1.0 and cues[0][1] == 2.5
+    old_mac = tmp_path / "mac.srt"
+    old_mac.write_bytes(body.replace("\r\n", "\r").encode("utf-8"))
+    assert len(read_srt(old_mac)) == 2

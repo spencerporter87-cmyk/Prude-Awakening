@@ -69,7 +69,7 @@ def main(argv=None):
     project = Project.open(src)
     if a.rescan:
         project.clear_cache()
-        project = Project(source=str(src))
+        project = Project.open(src)             # keeps painted blurs and scenes you added by hand
     info = probe(src)
     project.audio_track = a.audio_track if a.audio_track is not None else (
         project.audio_track if project.transcript else pick_audio_track(info, project.language))
