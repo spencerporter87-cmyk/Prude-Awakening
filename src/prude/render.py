@@ -138,9 +138,10 @@ def _fade_gain(ranges, fade=FADE):
 def build_audio_chain(info, track, mutes, blackouts, cuts, mute_mode, fade=False, inserts=()):
     """inserts: [(input number, start seconds)] mono clips laid over the silences (Advanced Editing)."""
     st = info.audio[track].raw
-    src = f"[0:a:{track}]asetnsamples=n=256:p=0"
+    mf = info.audio[track].map_filter
+    src = f"[0:a:{track}]{mf + ',' if mf else ''}asetnsamples=n=256:p=0"
     graph, label = [], "a0"
-    layout = st.get("channel_layout", "")
+    layout = info.audio[track].layout
     chans = channel_layouts().get(layout)
     if mutes and mute_mode == "center" and chans and "FC" in chans and len(chans) > 1:
         pads = "".join(f"[c{i}]" for i in range(len(chans)))
@@ -521,8 +522,12 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
                 continue
             if cuts:
                 removed = "+".join(f"gte(T,{b:.3f})*{b - a:.3f}" for a, b in cuts)
-                graph.append(f"[0:a:{j}]aselect='not({_between(cuts)})',asetpts='PTS-({removed})/TB',"
+                graph.append(f"[0:a:{j}]{t.map_filter + ',' if t.map_filter else ''}"
+                             f"aselect='not({_between(cuts)})',asetpts='PTS-({removed})/TB',"
                              f"aresample=async=1:first_pts=0[ao{j}]")
+                others.append((f"[ao{j}]", t.raw, True))
+            elif t.map_filter:
+                graph.append(f"[0:a:{j}]{t.map_filter}[ao{j}]")
                 others.append((f"[ao{j}]", t.raw, True))
             else:
                 others.append((f"0:a:{j}", t.raw, out_ext in MP4_LIKE))

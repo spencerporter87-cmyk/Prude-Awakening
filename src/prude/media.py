@@ -187,6 +187,10 @@ def stream_bitrate(st):
     return None
 
 
+# What ffmpeg itself assumes for a surround track whose file never says which speakers it is for
+GUESS_LAYOUT = {3: "3.0", 4: "4.0", 5: "5.0", 6: "5.1", 7: "6.1", 8: "7.1"}
+
+
 @dataclass
 class AudioTrack:
     number: int            # 0-based among audio streams
@@ -199,6 +203,13 @@ class AudioTrack:
     default: bool
     extra: bool            # commentary / audio description
     raw: dict = field(repr=False, default_factory=dict)
+    unlabeled: str = ""    # the layout we assumed because the file doesn't name one (3+ channels)
+
+    @property
+    def map_filter(self) -> str:
+        """Put this in front of a filter chain: a surround track with no layout label can't be mixed down or
+        re-encoded by ffmpeg ("Not yet implemented") until it is told which speakers the channels are."""
+        return f"channelmap=channel_layout={self.unlabeled}" if self.unlabeled else ""
 
     def describe(self) -> str:
         lang = LANG_NAMES.get(self.language, self.language or "Unknown language")
@@ -307,7 +318,9 @@ def probe(path) -> MediaInfo:
         title = tags.get("title", "")
         audio.append(AudioTrack(
             number=n, index=s["index"], codec=s.get("codec_name", "?"),
-            layout=s.get("channel_layout", ""), channels=int(s.get("channels") or 2),
+            layout=s.get("channel_layout") or GUESS_LAYOUT.get(int(s.get("channels") or 2), ""),
+            channels=int(s.get("channels") or 2),
+            unlabeled=("" if s.get("channel_layout") else GUESS_LAYOUT.get(int(s.get("channels") or 2), "")),
             language=(tags.get("language") or "").lower(), title=title,
             default=bool(disp.get("default")),
             extra=("commentary" in title.lower() or "description" in title.lower()
@@ -325,6 +338,14 @@ def probe(path) -> MediaInfo:
                      streams=streams, video=videos[0] if videos else {},
                      audio=audio,
                      subtitles=[s for s in streams if s.get("codec_type") == "subtitle"])
+
+
+def audio_map_filter(path, track) -> str:
+    """map_filter of one track of a file on disk ("" when it needs none)."""
+    try:
+        return probe(path).audio[track].map_filter
+    except Exception:                                      # noqa: BLE001 - only an optimisation of the filter
+        return ""
 
 
 def pick_audio_track(info: MediaInfo, language="en") -> int:

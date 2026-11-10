@@ -106,6 +106,7 @@ def actor_voice(info, track, start, end, mutes=(), window=6.0):
     a = max(0.0, start - window)
     r = subprocess.run([ffmpeg(), "-v", "error", "-nostdin", "-ss", f"{a:.3f}",
                         "-t", f"{end + window - a:.3f}", "-i", str(info.path), "-map", f"0:a:{track}",
+                        *(["-af", info.audio[track].map_filter] if info.audio[track].map_filter else []),
                         "-ac", "1", "-ar", "16000", "-f", "s16le", "-"],
                        capture_output=True, creationflags=NO_WINDOW)
     x = np.frombuffer(r.stdout, np.int16).astype(np.float32) / 32768.0 if r.stdout else np.zeros(0, np.float32)

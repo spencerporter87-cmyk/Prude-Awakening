@@ -404,9 +404,9 @@ def build_segments(times, scores, threshold, boundaries, duration, min_hits=1, s
     duration = float(duration)
     hits = [i for i, s in enumerate(scores) if s >= threshold]
     if min_hits > 1 and strong is not None:
-        keep = []
+        keep, hs = [], set(hits)
         for i in hits:
-            near = sum(1 for j in hits if abs(j - i) <= 1)
+            near = (i - 1 in hs) + (i in hs) + (i + 1 in hs)        # itself and its neighbours; no scan of every hit
             if near >= min_hits or scores[i] >= strong:
                 keep.append(i)
         hits = keep

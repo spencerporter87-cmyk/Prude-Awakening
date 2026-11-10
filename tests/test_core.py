@@ -1752,3 +1752,28 @@ def test_subtitle_files_in_other_encodings_keep_their_accents(tmp_path):
     old_mac = tmp_path / "mac.srt"
     old_mac.write_bytes(body.replace("\r\n", "\r").encode("utf-8"))
     assert len(read_srt(old_mac)) == 2
+
+
+def test_surround_audio_without_a_layout_label_still_works(media_dir, fake_words, tmp_path):
+    """Some files say '6 channels' but never which speakers; ffmpeg refuses to mix or re-encode those until
+    told. Scanning (dialogue wav), muting and the preview's sound must all cope."""
+    import subprocess
+    from prude.preview import audio_proxy
+    from prude.transcribe import extract_dialogue_wav
+    src = tmp_path / "unlabeled.mp4"
+    subprocess.run([ffmpeg_path(), "-y", "-v", "error", "-i", str(media_dir / "movie51.mkv"), "-map", "0:v", "-map", "0:a:0",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-b:a", "320k", "-t", "12", str(src)], check=True)
+    info = probe(src)
+    assert info.audio[0].channels == 6 and info.audio[0].unlabeled == "5.1" and info.audio[0].layout == "5.1"
+    wav = tmp_path / "d.wav"
+    extract_dialogue_wav(info, 0, wav)
+    assert wav.stat().st_size > 10000
+    assert audio_proxy(src, 0).stat().st_size > 1000
+    p = _project(src, fake_words)
+    f = FilterOptions(words=["mild", "blasphemy", "strong"], mute_mode="center")
+    p.mutes = [{"id": "m", "start": 3.0, "end": 3.5, "on": True, "words": ["x"]}]
+    p.scenes = [{"id": "a", "kind": "violence", "label": "x", "start": 6.0, "end": 8.0, "on": True, "action": "cut"}]
+    out = tmp_path / "o.mkv"
+    res = pipeline.render_project(p, f, Settings(device="cpu"), out)
+    assert res["valid"], res["problems"]
+    assert probe(out).audio[0].channels == 6

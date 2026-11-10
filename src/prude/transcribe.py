@@ -14,8 +14,11 @@ def extract_dialogue_wav(info, track, dest: Path, progress=None, cancel=None):
     t = info.audio[track]
     chans = channel_layouts().get(t.layout, [])
     cmd = [ffmpeg(), "-y", "-i", str(info.path), "-map", f"0:a:{track}", "-vn", "-sn", "-dn"]
+    fx = [t.map_filter] if t.map_filter else []
     if "FC" in chans and len(chans) > 1:
-        cmd += ["-af", "pan=mono|c0=FC"]
+        fx.append("pan=mono|c0=FC")
+    if fx:
+        cmd += ["-af", ",".join(fx)]
     cmd += ["-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(dest)]
     run_ffmpeg(cmd, info.duration, progress, cancel, "Pulling out the dialogue")
     return dest

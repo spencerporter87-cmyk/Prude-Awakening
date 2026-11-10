@@ -11,7 +11,7 @@ import os
 import time
 from pathlib import Path
 
-from .media import MediaError, ffmpeg, run
+from .media import MediaError, audio_map_filter, ffmpeg, run
 from .paths import app_data_dir
 
 
@@ -42,8 +42,9 @@ def audio_proxy(path, track=0):
         return out
     _tidy(folder)
     tmp = folder / f"{key}.part.m4a"
+    fx = audio_map_filter(path, track)
     r = run([ffmpeg(), "-v", "error", "-nostdin", "-y", "-i", str(path), "-map", f"0:a:{track}", "-vn", "-sn",
-             "-ac", "2", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", str(tmp)])
+             *(["-af", fx] if fx else []), "-ac", "2", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", str(tmp)])
     if r.returncode != 0 or not tmp.exists():
         tmp.unlink(missing_ok=True)
         raise MediaError(f"Couldn't prepare the sound for preview: {(r.stderr or '')[-200:]}")
@@ -115,6 +116,7 @@ def edited_clip(project, filters, settings, start, end, pad=8.0, progress=None, 
     if not (orig.exists() and orig.stat().st_size > 1000):
         r = run([ffmpeg(), "-v", "error", "-nostdin", "-y", "-ss", f"{w0:.3f}", "-t", f"{w1 - w0:.3f}", "-i", str(src),
                  "-map", "0:v:0", "-map", f"0:a:{track}", "-sn", "-dn",
+                 *(["-af", audio_map_filter(src, track)] if audio_map_filter(src, track) else []),
                  "-vf", "scale=-2:'min(720,ih)',format=yuv420p", "-c:v", "libx264", "-preset", "ultrafast",
                  "-crf", "22", "-c:a", "aac", "-b:a", "160k", "-ac", "2", "-movflags", "+faststart",
                  str(folder / "original.part.mp4")])
