@@ -48,8 +48,13 @@ python -m prude movie.mkv        # command line
 python -m pytest tests
 ```
 
-Every push builds the Windows installer on GitHub Actions, runs unit tests, an end-to-end test
-with real speech and real models, and a screenshot tour of every screen.
+Every push runs the unit tests on Linux (`.github/workflows/tests.yml`, a few minutes). The full Windows
+build (installer, packaged self-test, end-to-end test with real speech and models, screenshot tour) is slower,
+so it runs only on request: Actions → *Build and test (Windows)* → *Run workflow*, or push a tag like `v3.6.0`
+to publish a release.
+
+To build the installer on your own PC instead (no GitHub minutes), install Python 3.12 and Inno Setup 6, then run
+`.\packaging\build-local.ps1` in PowerShell. The result is `dist\Prude-Awakening-Setup-<version>.exe`.
 
 Only use Prude Awakening on video files you own that aren't copy-protected, for your own
 household's viewing.
