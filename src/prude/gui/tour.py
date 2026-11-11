@@ -146,6 +146,14 @@ def run_tour(app, out_dir: Path, video=None):
                          {"frames": len(w._paint_ed.frames), "status": w._paint_ed.status.text(),
                           "time": w._paint_ed.time_lab.text()})), w._paint_ed.close()))
 
+        def clear_open():
+            from .paint_editor import PaintEditor
+            w._clear_ed = PaintEditor(w.review.project, w.info, 9.4, None, w, mode="clear")
+            w._clear_ed.show()
+        add(clear_open, 12000)
+        add(lambda: (w._clear_ed.grab().save(str(Path(out_dir) / "5d-remove-blur-editor.png")),
+                     w._clear_ed.close()))
+
         def export_shot():
             from ..export import ExportOptions
             from .export_dialog import ExportDialog

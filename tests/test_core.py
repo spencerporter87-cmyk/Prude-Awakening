@@ -1781,3 +1781,58 @@ def test_surround_audio_without_a_layout_label_still_works(media_dir, fake_words
     res = pipeline.render_project(p, f, Settings(device="cpu"), out)
     assert res["valid"], res["problems"]
     assert probe(out).audio[0].channels == 6
+
+
+def test_remove_blur_area_takes_the_automatic_blur_off(media_dir, fake_words, tmp_path, monkeypatch):
+    """A 'remove blur' patch shows the picture as it is inside the area and times you mark; the automatic
+    blur stays everywhere else, and a blur you paint on top of it still shows."""
+    import cv2
+    from prude import blurparts, paint
+
+    class FakeDetector:
+        def __init__(self, classes):
+            pass
+
+        def boxes(self, image_path):
+            k = cv2.imread(str(image_path)).shape[1] / 640.0
+            return [(40.0 * k, 30.0 * k, 120.0 * k, 90.0 * k)]
+
+    monkeypatch.setattr(blurparts, "Detector", FakeDetector)
+    f = FilterOptions(words=[], scenes=["nude_f_breasts"])
+    p = _project(media_dir / "movie51.mkv", fake_words)
+    p.scenes = [{"id": "a", "kind": "nudity", "label": "Nudity", "start": 4.0, "end": 9.0, "on": True,
+                 "action": "blur_parts"}]
+    gone = paint.new_patch(5.0, 6.5, "Blur removed", mode="clear")
+    paint.add_stroke(gone, 5.0, [(0.04, 0.2), (0.28, 0.2)], 0.1)
+    paint.include_frame(gone, 6.4, 24.0)
+    p.paint = [gone]
+    assert not paint.blur_patches(p.paint) and paint.clear_patches(p.paint) == [gone]
+    out = tmp_path / "unblur.mkv"
+    res = pipeline.render_project(p, f, Settings(device="cpu"), out)
+    assert res["valid"], res["problems"]
+
+    def frame(path, t):
+        cap = cv2.VideoCapture(str(path))
+        cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
+        ok, img = cap.read()
+        assert ok
+        return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(float)
+
+    sharp = lambda img: cv2.Laplacian(img, cv2.CV_64F).var()           # noqa: E731
+    src = media_dir / "movie51.mkv"
+    box = (slice(50, 110), slice(50, 150))
+    for t, blurred in ((4.5, True), (5.7, False), (7.5, True)):
+        o, c = frame(src, t), frame(out, t)
+        assert (sharp(c[box]) < 0.3 * sharp(o[box])) == blurred, t
+    # only a clear patch and no body-part blur anywhere: nothing to do, nothing breaks
+    q = _project(media_dir / "movie51.mkv", fake_words)
+    q.paint = [gone]
+    assert not __import__("prude.render", fromlist=["x"]).paint_in_use(q)
+
+
+def test_edited_preview_clock_skips_the_cuts():
+    from prude.preview import clip_to_movie
+    assert clip_to_movie(1.0, []) == 1.0
+    assert clip_to_movie(1.0, [[3.0, 5.0]]) == 1.0                       # before the cut
+    assert clip_to_movie(3.5, [[3.0, 5.0]]) == 5.5                       # after it: 2 s were taken out
+    assert clip_to_movie(9.0, [[6.0, 7.0], [2.0, 4.0]]) == 12.0          # two cuts, any order

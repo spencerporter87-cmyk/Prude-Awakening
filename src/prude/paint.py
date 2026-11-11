@@ -28,9 +28,15 @@ DEFAULT_RADIUS = 0.03    # brush radius as a fraction of the picture's width
 
 
 # ------------------------------------------------------------------ the shape and where it is
-def new_patch(start, end, label="Painted blur"):
+def new_patch(start, end, label="Painted blur", mode="blur"):
+    """mode "blur" blurs what you painted; mode "clear" is the opposite: it takes the automatic body-part blur
+    off the area you painted (the picture there is shown as it is)."""
     return {"id": uuid.uuid4().hex[:10], "on": True, "label": label, "start": float(start), "end": float(end),
-            "pad_before": 0.0, "pad_after": 0.0, "anchor": [0.5, 0.5], "strokes": [], "keys": []}
+            "pad_before": 0.0, "pad_after": 0.0, "anchor": [0.5, 0.5], "strokes": [], "keys": [], "mode": mode}
+
+
+def is_clear(patch):
+    return (patch or {}).get("mode") == "clear"
 
 
 def span(patch):
@@ -144,6 +150,15 @@ def active(patches):
     return [p for p in patches or [] if p.get("on", True) and p.get("strokes")]
 
 
+def blur_patches(patches):
+    """The painted patches that blur (not the ones that remove the automatic blur)."""
+    return [p for p in active(patches) if not is_clear(p)]
+
+
+def clear_patches(patches):
+    return [p for p in active(patches) if is_clear(p)]
+
+
 # ------------------------------------------------------------------ the mask
 def mask_at(patches, t, w, h, grow_px=3.0, feather=0.4):
     """Grayscale picture (255 = blur here) for time t from every patch that is on at that moment."""
@@ -236,10 +251,13 @@ def write_masks(patches, info, work_dir, progress=None, cancel=None):
     return segs
 
 
-def filter_graph(info, segs, first_input, src):
+def filter_graph(info, segs, first_input, src, restore=None, tag=""):
     """Filtergraph pieces that blur the painted areas of `src`. Returns (graph, label).
     Each mask clip is an extra input (numbered from first_input); black gaps join them into one
-    mask as long as the movie, which then blurs a copy of the picture only where it's white."""
+    mask as long as the movie, which then blurs a copy of the picture only where it's white.
+    With `restore` (the label of an untouched copy of the picture) the white parts show that copy instead of a
+    blurred one: that is how the automatic blur is taken off an area. `tag` keeps the labels of two such
+    graphs in one filtergraph apart."""
     W, H = info.width, info.height
     rate = _rate(info)
     sar = (info.video.get("sample_aspect_ratio") or "1:1").replace(":", "/")
@@ -262,26 +280,31 @@ def filter_graph(info, segs, first_input, src):
     for j, s in enumerate(segs):
         gap = s["start_frame"] - at
         if gap > 0:
-            pieces.append(f"color=c=black:s={W}x{H}:r={rate}:d={(gap - 0.5) / fps:.5f},format=gray,setsar={sar}[pg{j}]")
-            parts.append(f"[pg{j}]")
+            pieces.append(f"color=c=black:s={W}x{H}:r={rate}:d={(gap - 0.5) / fps:.5f},format=gray,setsar={sar}[{tag}pg{j}]")
+            parts.append(f"[{tag}pg{j}]")
         pieces.append(f"[{first_input + j}:v:0]{snap or 'setpts=PTS-STARTPTS,'}format=gray,"
-                      f"scale={W}:{H}:flags=bilinear,setsar={sar},format=gray[pm{j}]")
-        parts.append(f"[pm{j}]")
+                      f"scale={W}:{H}:flags=bilinear,setsar={sar},format=gray[{tag}pm{j}]")
+        parts.append(f"[{tag}pm{j}]")
         at = s["start_frame"] + s["frames"]
     tail = max(1, int(round((info.duration + 2) * fps)) - at)
-    pieces.append(f"color=c=black:s={W}x{H}:r={rate}:d={(tail - 0.5) / fps:.5f},format=gray,setsar={sar}[pgt]")
-    parts.append("[pgt]")
+    pieces.append(f"color=c=black:s={W}x{H}:r={rate}:d={(tail - 0.5) / fps:.5f},format=gray,setsar={sar}[{tag}pgt]")
+    parts.append(f"[{tag}pgt]")
     enable = "+".join(f"between(t,{max(0.0, s['start'] - 0.2):.3f},{s['end'] + 0.2:.3f})" for s in segs)
+    if restore:      # an untouched copy of the picture goes back wherever the mask is white
+        look = [f"{src}{norm}null[{tag}ppmain]",
+                f"{restore}{norm}format={alpha_fmt}[{tag}ppblur]"]
+    else:
+        look = [f"{src}{norm}split=2[{tag}ppmain][{tag}ppcopy]",
+                f"[{tag}ppcopy]boxblur=luma_radius='min(w,h)/18':luma_power=4:chroma_radius='min(cw,ch)/18':"
+                f"chroma_power=4:enable='{enable}',format={alpha_fmt}[{tag}ppblur]"]
     graph = pieces + [
-        f"{''.join(parts)}concat=n={len(parts)}:v=1:a=0,{snap}format={mask_fmt}[ppmask]",
-        f"{src}{norm}split=2[ppmain][ppcopy]",
-        f"[ppcopy]boxblur=luma_radius='min(w,h)/18':luma_power=4:chroma_radius='min(cw,ch)/18':"
-        f"chroma_power=4:enable='{enable}',format={alpha_fmt}[ppblur]",
-        "[ppblur][ppmask]alphamerge[ppblurred]",
-        f"[ppmain][ppblurred]overlay=0:0:shortest=1:format={'yuv420p10' if ten else 'yuv420'}:"
-        f"enable='{enable}'[vpaint]",
+        f"{''.join(parts)}concat=n={len(parts)}:v=1:a=0,{snap}format={mask_fmt}[{tag}ppmask]",
+        *look,
+        f"[{tag}ppblur][{tag}ppmask]alphamerge[{tag}ppblurred]",
+        f"[{tag}ppmain][{tag}ppblurred]overlay=0:0:shortest=1:format={'yuv420p10' if ten else 'yuv420'}:"
+        f"enable='{enable}'[{tag}vpaint]",
     ]
-    return graph, "[vpaint]"
+    return graph, f"[{tag}vpaint]"
 
 
 # ------------------------------------------------------------------ frames for the editor
@@ -313,7 +336,7 @@ def preview_frame(path, patch, t, cache=None, show_blur=True):
     img = cv2.imread(str(path))
     if img is None:
         raise MediaError(f"Couldn't read a frame: {path}")
-    if not show_blur or not patch.get("strokes"):
+    if not show_blur or not patch.get("strokes") or is_clear(patch):     # a "remove blur" area shows the picture as it is
         return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     h, w = img.shape[:2]
     m = mask_at([patch], t, w, h)

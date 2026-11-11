@@ -29,6 +29,7 @@ class FrameBar(QWidget):
         self.setMinimumHeight(34)
         self.setCursor(Qt.PointingHandCursor)
         self.n, self.i, self.a, self.b, self.keys = 1, 0, 0, 0, []
+        self.color = "#8b5cf6"
 
     def set_state(self, n, i, a, b, keys):
         self.n, self.i, self.a, self.b, self.keys = max(1, n), i, a, b, keys
@@ -46,7 +47,7 @@ class FrameBar(QWidget):
         p.drawRoundedRect(r, 4, 4)
         if self.b > self.a:                               # the frames that get blurred
             x0, x1 = 6 + (self.width() - 12) * self.a / self.n, 6 + (self.width() - 12) * self.b / self.n
-            p.setBrush(QColor("#8b5cf6"))
+            p.setBrush(QColor(self.color))
             p.drawRoundedRect(QRectF(max(6, x0), 12, max(2, min(x1, self.width() - 6) - max(6, x0)), 10), 4, 4)
         p.setBrush(QColor("#f59e0b"))                    # key positions
         for k in self.keys:
@@ -198,14 +199,17 @@ class PaintEditor(QDialog):
     _loaded = Signal(object, str)
     _progress = Signal(float)
 
-    def __init__(self, project, info, at, patch=None, parent=None):
+    def __init__(self, project, info, at, patch=None, parent=None, mode="blur"):
         super().__init__(parent)
-        self.setWindowTitle("Paint a blur")
+        self.clear = (paint.is_clear(patch) if patch else mode == "clear")     # "remove the automatic blur here"
+        self.default_name = "Blur removed" if self.clear else "Painted blur"
+        self.setWindowTitle("Remove blur" if self.clear else "Paint a blur")
         self.resize(1040, 760)
         self.project, self.info = project, info
         self.fps = float(info.fps or 24.0)
         self.new = patch is None
-        self.patch = copy.deepcopy(patch) if patch else paint.new_patch(at, at + 1.0)
+        self.patch = copy.deepcopy(patch) if patch else paint.new_patch(
+            at, at + 1.0, self.default_name, mode="clear" if self.clear else "blur")
         if self.new:
             self.patch["start"] = self.patch["end"] = paint.aligned(at, self.fps)
         self.result = None
@@ -219,17 +223,26 @@ class PaintEditor(QDialog):
 
         lay = QVBoxLayout(self)
         lay.setSpacing(8)
-        lay.addWidget(label("Paint a blur", "H2"))
-        self.help = label(
-            "Paint over what should be blurred (🖌 Paint), then press ▶ Play: the blur keeps going while it plays "
-            "and stops where you pause. To make it follow a person, pick ➜ Follow, then press and hold on the "
-            "blur and drag along with them: it plays while you hold and the blur goes where your mouse goes. "
-            "Fine tune with ← →, ✥ Move and the Starts / Ends buttons. Then Save and it plays back for real.",
-            "Muted", wrap=True)
+        lay.addWidget(label("Remove blur" if self.clear else "Paint a blur", "H2"))
+        if self.clear:
+            text = ("Paint over the spot where the automatic blur should NOT be (🖌 Paint), then press ▶ Play: it keeps "
+                    "going while it plays and stops where you pause. The automatic blur comes off inside the area you "
+                    "paint, for the frames you mark, and stays on everywhere else. Follow, Move and the Starts / Ends "
+                    "buttons work the same as for a painted blur. The picture here shows the movie without any "
+                    "blur; 🎬 See it edited shows the result.")
+        else:
+            text = ("Paint over what should be blurred (🖌 Paint), then press ▶ Play: the blur keeps going while it "
+                    "plays and stops where you pause. To make it follow a person, pick ➜ Follow, then press and hold "
+                    "on the blur and drag along with them: it plays while you hold and the blur goes where your mouse "
+                    "goes. Fine tune with ← →, ✥ Move and the Starts / Ends buttons. Then Save and it plays back "
+                    "for real.")
+        self.help = label(text, "Muted", wrap=True)
         lay.addWidget(self.help)
         self.canvas = Canvas()
         lay.addWidget(self.canvas, 1)
         self.bar = FrameBar()
+        if self.clear:
+            self.bar.color = "#10b981"
         self.bar.seek.connect(self._goto)
         lay.addWidget(self.bar)
 
@@ -282,6 +295,9 @@ class PaintEditor(QDialog):
         self.show_blur = QCheckBox("Show the blur")
         self.show_blur.setChecked(True)
         self.show_blur.toggled.connect(lambda _: self._show())
+        if self.clear:
+            self.show_blur.setChecked(False)
+            self.show_blur.setVisible(False)
         tools.addWidget(self.show_blur)
         lay.addLayout(tools)
 
@@ -298,7 +314,7 @@ class PaintEditor(QDialog):
         self.span_lab = label("", "Small")
         span.addWidget(self.span_lab, 1)
         span.addWidget(label("Name", "Small"))
-        self.name = QLineEdit(self.patch.get("label") or "Painted blur")
+        self.name = QLineEdit(self.patch.get("label") or self.default_name)
         self.name.setFixedWidth(170)
         span.addWidget(self.name)
         lay.addLayout(span)
@@ -307,7 +323,7 @@ class PaintEditor(QDialog):
         self.status = label("Reading the frames…", "Muted")
         end.addWidget(self.status, 1)
         end.addWidget(button("Cancel", None, self.reject))
-        self.save_btn = button("Save blur", "Primary", self.accept)
+        self.save_btn = button("Save", "Primary", self.accept)
         end.addWidget(self.save_btn)
         lay.addLayout(end)
 
@@ -389,14 +405,17 @@ class PaintEditor(QDialog):
         qimg = QImage(arr.data, w, h, 3 * w, QImage.Format_RGB888).copy()
         note = ""
         if self.patch["strokes"]:
-            note = "● blurred on this frame" if inside else "○ not blurred on this frame"
+            if self.clear:
+                note = "● blur removed on this frame" if inside else "○ blur not removed on this frame"
+            else:
+                note = "● blurred on this frame" if inside else "○ not blurred on this frame"
         self.canvas.set_image(qimg, paint.shape_at(self.patch, t) if self.patch["strokes"] else [], note)
         keys = [int(round((k - self.t0) * self.fps)) for k in paint.key_times(self.patch)]
         n = len(self.frames)
         fa, fb = (a - self.t0) * self.fps, (b - self.t0) * self.fps
         self.bar.set_state(n, self.i, max(0, fa), min(n, fb), keys)
         self.time_lab.setText(f"{fmt_time(t)}  ·  frame {int(round(t * self.fps))}")
-        self.span_lab.setText(f"Blurred from {fmt_time(a)} to {fmt_time(b)} ({paint.frame_count(self.patch, self.fps)} frames, {(b - a):.2f} s)" if self.patch["strokes"]
+        self.span_lab.setText(f"{'Blur removed' if self.clear else 'Blurred'} from {fmt_time(a)} to {fmt_time(b)} ({paint.frame_count(self.patch, self.fps)} frames, {(b - a):.2f} s)" if self.patch["strokes"]
                               else "Paint something to begin")
 
     # ------------------------------------------------------------------ editing
@@ -526,9 +545,10 @@ class PaintEditor(QDialog):
     # ------------------------------------------------------------------ finishing
     def accept(self):
         if not self.patch["strokes"]:
-            self.status.setText("Nothing painted yet. Paint over what should be blurred, or press Cancel.")
+            self.status.setText("Nothing painted yet. Paint over the spot where the automatic blur should come off, or press Cancel."
+                                if self.clear else "Nothing painted yet. Paint over what should be blurred, or press Cancel.")
             return
-        self.patch["label"] = self.name.text().strip() or "Painted blur"
+        self.patch["label"] = self.name.text().strip() or self.default_name
         self.patch["on"] = True
         self.result = copy.deepcopy(self.patch)
         super().accept()

@@ -311,8 +311,10 @@ def write_commands(path: Path, samples, ranges, W, H, grow=GROW["normal"]):
     return path
 
 
-def filter_parts(info, ranges, cmd_file_name, enable_expr):
-    """Filtergraph pieces: returns (pre, label) where `pre` turns [0:v:0] into [vparts]."""
+def filter_parts(info, ranges, cmd_file_name, enable_expr, keep_original=None):
+    """Filtergraph pieces: returns (pre, label) where `pre` turns [0:v:0] into [vparts].
+    keep_original="[label]" also leaves an untouched copy of the picture under that label (used to take the blur
+    off areas the person marked)."""
     W, H = info.width, info.height
     rate = info.video.get("avg_frame_rate") or info.video.get("r_frame_rate") or "24"
     if rate in ("0/0", "0"):
@@ -328,7 +330,7 @@ def filter_parts(info, ranges, cmd_file_name, enable_expr):
     graph = [
         f"color=c=black:s={W}x{H}:r={rate}:d={dur:.3f},format=gray,setsar={sar},"
         f"sendcmd=f={cmd_file_name},{slots},format={mask_fmt}[pmask]",
-        "[0:v:0]split=2[pmain][pcopy]",
+        f"[0:v:0]split={3 if keep_original else 2}[pmain][pcopy]{keep_original or ''}",
         f"[pcopy]boxblur=luma_radius='min(w,h)/18':luma_power=4:chroma_radius='min(cw,ch)/18':"
         f"chroma_power=4,format={alpha_fmt}[pblur]",
         "[pblur][pmask]alphamerge[pblurred]",

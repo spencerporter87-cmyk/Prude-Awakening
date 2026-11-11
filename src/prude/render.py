@@ -213,7 +213,7 @@ def scene_ranges(project, default_action, duration=0.0, blur_margin=0.0):
 
 def paint_in_use(project):
     from . import paint
-    return bool(paint.active(getattr(project, "paint", None)))
+    return bool(paint.blur_patches(getattr(project, "paint", None)))
 
 
 def build_video_chain(blackouts, cuts, blurs=(), src="[0:v:0]", scale_h=None):
@@ -443,7 +443,7 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
 
     # ---- filter graph
     # ---- blur only the exposed body parts (detected now, several times a second)
-    vsrc, pgraph = "[0:v:0]", []
+    vsrc, pgraph, clear_segs = "[0:v:0]", [], []
     if parts and info.video:
         from . import blurparts
         classes = blurparts.classes_for([t for t in filters.scenes if t.startswith("nude_")])
@@ -472,20 +472,31 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
             cmd_name = f"prude-blur-{uuid.uuid4().hex[:8]}.cmd"   # plain name: safe inside a filtergraph
             blurparts.write_commands(out.parent / cmd_name, samples, found, info.width, info.height, grow)
             tmp_files.append(out.parent / cmd_name)
+            # areas you marked "remove blur": the automatic blur comes off there (picture shown as it is)
+            from . import paint
+            gone = [x for x in paint.clear_patches(getattr(project, "paint", None))
+                    if any(paint.span(x)[1] > a - 0.5 and paint.span(x)[0] < b + 0.5 for a, b in found)]
+            if gone:
+                cwork = out.parent / f".{out.stem}.prude-unblur"
+                tmp_dirs.append(cwork)
+                clear_segs = paint.write_masks(gone, info, cwork, None, cancel)
+                if clear_segs:
+                    notes.append(f"Took the automatic blur off {len(gone)} area(s) you marked.")
             pgraph, vsrc = blurparts.filter_parts(info, found, cmd_name, _between(
-                [(a - 0.3, b + 0.3) for a, b in found]))
+                [(a - 0.3, b + 0.3) for a, b in found]), keep_original="[porig]" if clear_segs else None)
         shutil.rmtree(out.parent / f".{out.stem}.prude-blur", ignore_errors=True)
     # ---- hand-painted blurs: a mask clip per stretch of time, made from your strokes
     paint_segs = []
     if info.video:
         from . import paint
-        if paint.active(getattr(project, "paint", None)):
+        painted_list = paint.blur_patches(getattr(project, "paint", None))
+        if painted_list:
             pwork = out.parent / f".{out.stem}.prude-paint"
             tmp_dirs.append(pwork)
-            paint_segs = paint.write_masks(project.paint, info, pwork,
+            paint_segs = paint.write_masks(painted_list, info, pwork,
                                            (lambda f, m: progress(0.03 * f, m)) if progress else None, cancel)
             if paint_segs:
-                notes.append(f"Blurred {len(paint.active(project.paint))} area(s) you painted.")
+                notes.append(f"Blurred {len(painted_list)} area(s) you painted.")
     # ---- words in subtitles burned into the picture: blur their spot while they show
     if burned and info.video:
         from . import burnin
@@ -508,6 +519,11 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
                      + (f", {len(failed)} left silent because the voice failed" if failed else "") + ".")
     base = 1 + len(subs) + (1 if fast_list else 0)
     inserts = [(base + n, c["start"]) for n, c in enumerate(clips)]
+    if clear_segs:          # before the painted blurs, so a blur you paint on top of a cleared area still shows
+        from . import paint
+        restored, vsrc = paint.filter_graph(info, clear_segs, base + len(clips) + len(paint_segs), vsrc,
+                                            restore="[porig]", tag="r")
+        pgraph = pgraph + restored
     if paint_segs:
         from . import paint
         painted, vsrc = paint.filter_graph(info, paint_segs, base + len(clips), vsrc)
@@ -547,7 +563,7 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
         cmd += ["-f", "concat", "-safe", "0", "-i", str(fast_list)]
     for c in clips:
         cmd += ["-i", c["wav"]]
-    for sg in paint_segs:
+    for sg in paint_segs + clear_segs:
         cmd += ["-i", sg["path"]]
     if len(graph_text) > 20000:
         script = out.with_name(f"{out.stem}.prude-filter.txt")

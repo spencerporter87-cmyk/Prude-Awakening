@@ -715,14 +715,15 @@ class PaintRow(QFrame):
         chk.toggled.connect(lambda v: (patch.__setitem__("on", bool(v)), on_change()))
         lay.addWidget(chk)
         a, b = paint.span(patch)
-        lay.addWidget(label(f"🖌  {patch.get('label') or 'Painted blur'}", "H2"))
+        gone = paint.is_clear(patch)
+        lay.addWidget(label(f"{'🧽' if gone else '🖌'}  {patch.get('label') or ('Blur removed' if gone else 'Painted blur')}", "H2"))
         nk = len(patch.get("keys") or [])
         lay.addWidget(label(f"{fmt_time(a)} – {fmt_time(b)}  ·  {paint.frame_count(patch, fps)} frames  ·  "
                             + (f"{nk} key position{'s' if nk != 1 else ''}" if nk else "stays in one place"), "Small"))
         lay.addStretch()
         lay.addWidget(button("✎ Edit", None, lambda: on_edit(patch), tip="Open it in the paint window"))
         lay.addWidget(button("🎬 Edited", "Link", lambda: on_see(
-            {"start": a, "end": b, "label": patch.get("label") or "Painted blur"}),
+            {"start": a, "end": b, "label": patch.get("label") or ("Blur removed" if gone else "Painted blur")}),
             tip="See and hear the real result around this blur"))
         lay.addWidget(button("🗑 Delete", "Link", lambda: on_delete(patch)))
 
@@ -957,7 +958,9 @@ class ReviewPage(QWidget):
         self.scene_rows = []
         painted = list(getattr(self.project, "paint", None) or [])
         if painted:
-            self.scene_list.addWidget(label(f"Painted blurs ({len(painted)})", "H2"))
+            self.scene_list.addWidget(label(f"Painted blurs and removed blurs ({len(painted)})"
+                                            if any(x.get("mode") == "clear" for x in painted)
+                                            else f"Painted blurs ({len(painted)})", "H2"))
             for pt in painted:
                 self.scene_list.addWidget(PaintRow(pt, self._painted_changed, self._paint, self._see_edited,
                                                    self._paint_delete, float(getattr(self.info, "fps", 24.0) or 24.0)))
@@ -1071,16 +1074,18 @@ class ReviewPage(QWidget):
                 self._update()
                 self.changed.emit()
 
-    def _paint(self, patch=None):
+    def _paint(self, patch=None, at=None, mode="blur"):
+        """Open the paint window (a new blur, a new 'remove blur' area, or an existing one). True when saved."""
         if self.info is None or not self.info.video:
             QMessageBox.information(self, "Paint a blur", "This file has no picture to paint on.")
-            return
+            return False
         patch = patch if isinstance(patch, dict) else None
-        at = float(patch["start"]) if patch else self.player.position()
+        if at is None:
+            at = float(patch["start"]) if patch else self.player.position()
         if HAVE_MM:
             self.player.player.pause()
         from .paint_editor import PaintEditor
-        d = PaintEditor(self.project, self.info, at, patch, self)
+        d = PaintEditor(self.project, self.info, at, patch, self, mode=mode)
         if d.exec() and d.result:
             lst = self.project.paint
             for i, x in enumerate(lst):
@@ -1095,6 +1100,8 @@ class ReviewPage(QWidget):
             a, b = paint.span(d.result)                     # play it back for real, right away
             QTimer.singleShot(150, lambda: self._see_edited(
                 {"start": a, "end": b, "label": d.result.get("label") or "Painted blur"}))
+            return True
+        return False
 
     def _painted_changed(self):
         self._fill_scenes()
@@ -1159,7 +1166,7 @@ class ReviewPage(QWidget):
         from .. import paint
         drawn = [{"start": a, "end": b, "on": x.get("on", True), "action": "blur_parts", "kind": "manual",
                   "label": x.get("label") or "Painted blur"}
-                 for x in (getattr(p, "paint", None) or []) if x.get("strokes")
+                 for x in (getattr(p, "paint", None) or []) if x.get("strokes") and not paint.is_clear(x)
                  for a, b in [paint.span(x)]]
         self.player.timeline.set_plan(dur, p.mutes, p.scenes + drawn, self.filters.scene_action)
 
@@ -1184,15 +1191,18 @@ class ReviewPage(QWidget):
             parts.append(f"{len(scenes)} of {len(self.project.scenes)} scenes ({what})")
         from .. import paint
         painted = paint.active(getattr(self.project, "paint", None))
-        if painted:
-            parts.append(f"{len(painted)} painted blur{'s' if len(painted) != 1 else ''}")
-        if painted or any((s.get("action") or self.filters.scene_action) != "mute" for s in scenes) or \
+        drawn = paint.blur_patches(painted)
+        if drawn:
+            parts.append(f"{len(drawn)} painted blur{'s' if len(drawn) != 1 else ''}")
+        if len(painted) > len(drawn):
+            parts.append(f"{len(painted) - len(drawn)} removed blur area{'s' if len(painted) - len(drawn) != 1 else ''}")
+        if drawn or any((s.get("action") or self.filters.scene_action) != "mute" for s in scenes) or \
                 any(x.get("on", True) for x in getattr(self.project, "burned_edits", [])):
             parts.append("video will be re-encoded at very high quality")
         else:
             parts.append("picture copied untouched")
         self.summary.setText(" · ".join(parts) + ".")
-        self.go.setEnabled(bool(mutes or scenes or subs or painted))
+        self.go.setEnabled(bool(mutes or scenes or subs or drawn))
 
 
 def clean_timeline(project, filters, duration):

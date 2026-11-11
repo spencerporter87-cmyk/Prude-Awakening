@@ -69,7 +69,7 @@ def nearest_edit(project, t):
         a, b = paint.span(pt)
         d = 0.0 if a <= t <= b else min(abs(a - t), abs(b - t))
         if best is None or d < best[0]:
-            best = (d, a, b, f"🖌 {pt.get('label') or 'Painted blur'}")
+            best = (d, a, b, f"{'🧽' if paint.is_clear(pt) else '🖌'} {pt.get('label') or 'Painted blur'}")
     return None if best is None else best[1:]
 
 
@@ -80,6 +80,14 @@ def _shift(items, w0, w1):
         if b > w0 and a < w1:
             out.append(dict(it, start=a - w0, end=b - w0))
     return out
+
+
+def clip_to_movie(pos, cuts):
+    """A time in the edited clip -> the same moment in the original clip, given the cut ranges (original time)."""
+    for a, b in sorted(cuts):
+        if pos >= a - 1e-6:
+            pos += b - a
+    return pos
 
 
 def edited_clip(project, filters, settings, start, end, pad=8.0, progress=None, cancel=None, log=print):
@@ -154,14 +162,19 @@ def edited_clip(project, filters, settings, start, end, pad=8.0, progress=None, 
     bits = []
     if words:
         bits.append(f"🔇 {len(words)} word{'s' if len(words) != 1 else ''} silenced")
-    npaint = len(paint.active(p.paint))
+    npaint = len(paint.blur_patches(p.paint))
     if npaint:
         bits.append(f"🖌 {npaint} painted blur{'s' if npaint != 1 else ''}")
+    nclear = len(paint.clear_patches(p.paint))
+    if nclear:
+        bits.append(f"🧽 blur removed from {nclear} area{'s' if nclear != 1 else ''}")
     for act, name in (("cut", "✂ cut out"), ("black", "⬛ blacked out"), ("black_keep", "⬛ black screen, sound kept"),
                       ("blur", "◌ blurred"), ("blur_parts", "◌ private parts blurred"), ("mute", "🔇 silenced")):
         n = sum(1 for x in scenes if (x.get("action") or filters.scene_action) == act)
         if n:
             bits.append(f"{name}: {n} scene{'s' if n != 1 else ''}")
-    return {"original": str(orig), "edited": str(edited), "start": w0, "end": w1,
+    from .render import scene_ranges
+    cuts = [[a, b] for a, b in scene_ranges(p, filters.scene_action, w1 - w0)["cut"]]   # gone from the edited clip
+    return {"original": str(orig), "edited": str(edited), "start": w0, "end": w1, "cuts": cuts,
             "summary": " · ".join(bits) or "no edits in this stretch", "valid": res.get("valid", True),
             "problems": res.get("problems", [])}
