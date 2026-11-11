@@ -154,6 +154,8 @@ jobs:
           gh release delete latest-build --cleanup-tag -y 2>$null
           $f = Get-ChildItem dist/Prude-Awakening-Setup-*.exe | Select-Object -First 1
           gh release create latest-build $f.FullName --prerelease --target $env:GITHUB_SHA --title "Latest build" --notes "Automatic build of the newest code. Download Prude-Awakening-Setup below and run it."
+          # a release has once ended up as a draft (its download link then says "Not found"): make sure it is public
+          gh release edit latest-build --draft=false --prerelease
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
