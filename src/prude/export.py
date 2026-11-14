@@ -24,6 +24,9 @@ class ExportOptions:
     own_folder: bool = True          # put it in a "Title (Year)" folder when saving elsewhere
     fast_cuts: bool = False          # cut scenes without re-encoding (cuts land on keyframes)
     other_audio: bool = False        # also keep the other audio tracks (not filtered!)
+    check_copy: bool = True          # afterwards, look at the finished copy for anything that slipped through
+    check_listen: bool = False       # ... and also listen to it again (slower)
+    viewer: str = ""                 # when several viewers get a copy each: whose copy this is (names the file)
 
     @classmethod
     def from_dict(cls, d):
@@ -116,7 +119,7 @@ def output_path(src: Path, opts: ExportOptions) -> Path:
     elif opts.naming == "plex_library":
         name = base
     else:
-        name = f"{src.stem} (clean)"
+        name = f"{src.stem} ({clean_name(opts.viewer) or 'clean'})"
     folder = Path(opts.folder) if opts.folder else src.parent
     if opts.folder and opts.own_folder and opts.naming != "simple" and folder.name != base:
         folder = folder / base

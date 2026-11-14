@@ -12,7 +12,7 @@ from .widgets import button, label
 
 class ExportDialog(QDialog):
     def __init__(self, source, info, opts: ExportOptions, needs_reencode, removed_seconds,
-                 preset_name="", parent=None):
+                 preset_name="", parent=None, viewers=()):
         super().__init__(parent)
         self.setWindowTitle("Save the clean copy")
         self.setMinimumWidth(760)
@@ -36,6 +36,18 @@ class ExportDialog(QDialog):
         w = QWidget()
         w.setLayout(row)
         form.addRow("Save to", w)
+        self.viewer_boxes = {}
+        if len(viewers) > 1:
+            vb = QVBoxLayout()
+            vb.setContentsMargins(0, 0, 0, 0)
+            for v in viewers:
+                cb = QCheckBox(v)
+                cb.setChecked(True)
+                self.viewer_boxes[v] = cb
+                vb.addWidget(cb)
+            vw = QWidget()
+            vw.setLayout(vb)
+            form.addRow("Make a copy for", vw)
         self.own = QCheckBox("Put it in its own \"Title (Year)\" folder (how Plex likes it)")
         self.own.setChecked(opts.own_folder)
         form.addRow("", self.own)
@@ -93,6 +105,17 @@ class ExportDialog(QDialog):
         self.other = QCheckBox("Also keep the other audio tracks (other languages, commentary) - NOT filtered")
         self.other.setChecked(opts.other_audio)
         form.addRow("", self.other)
+        self.check = QCheckBox("Afterwards, check the finished copy for anything that slipped through")
+        self.check.setToolTip("Measures that every silenced word is really silent, reads the finished subtitles and looks at\n"
+                              "the finished picture again with a stricter eye. Adds a few minutes, and lists anything\n"
+                              "it finds with a way to fix it.")
+        self.check.setChecked(opts.check_copy)
+        form.addRow("", self.check)
+        self.listen = QCheckBox("Also listen to the finished copy again (slower)")
+        self.listen.setChecked(opts.check_listen)
+        self.check.toggled.connect(self.listen.setEnabled)
+        self.listen.setEnabled(opts.check_copy)
+        form.addRow("", self.listen)
 
         self.preview = label("", "Muted", wrap=True)
         self.preview.setStyleSheet("background: #FFFFFF; border: 1px solid #E8DDCF; border-radius: 10px; padding: 10px;")
@@ -101,7 +124,7 @@ class ExportDialog(QDialog):
         for sig in (self.folder.textChanged, self.edition.textChanged, self.own.toggled,
                     self.container.currentIndexChanged, self.res.currentIndexChanged,
                     self.quality.currentIndexChanged, self.naming.buttonToggled, self.fast.toggled,
-                    self.other.toggled):
+                    self.other.toggled, *[b.toggled for b in self.viewer_boxes.values()]):
             sig.connect(self._refresh)
         bb = QDialogButtonBox(QDialogButtonBox.Cancel)
         self.ok = button("Save clean copy  →", "Primary", self.accept)
@@ -116,7 +139,12 @@ class ExportDialog(QDialog):
                              resolution=self.res.currentData(), quality=self.quality.currentData(),
                              naming=naming, edition=self.edition.text().strip() or "Family Edit",
                              own_folder=self.own.isChecked(), fast_cuts=self.fast.isChecked(),
-                             other_audio=self.other.isChecked())
+                             other_audio=self.other.isChecked(), check_copy=self.check.isChecked(),
+                             check_listen=self.check.isChecked() and self.listen.isChecked())
+
+    def selected_viewers(self):
+        """Names of the viewers to make a copy for (empty when this movie has only one viewer)."""
+        return [v for v, b in self.viewer_boxes.items() if b.isChecked()]
 
     def output(self) -> Path:
         return output_path(self.src, self.options())
@@ -142,4 +170,8 @@ class ExportDialog(QDialog):
             lines.append("<span style='color:#C8412B'>A file with this name already exists and will be replaced.</span>")
         if o.naming == "plex_edition":
             lines.append("Plex shows this as an edition of the movie (needs Plex Pass on the server account).")
+        if len(self.selected_viewers()) > 1:
+            lines.append("One copy per ticked viewer, each saved under its own name (for example “Kids Edit”).")
+        if self.viewer_boxes:
+            self.ok.setEnabled(bool(self.selected_viewers()))
         self.preview.setText("<br>".join(lines))

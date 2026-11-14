@@ -680,6 +680,10 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
     result = {"output": str(out), "how": how, "mutes": len(mutes), "cuts": len(cuts),
             "blackouts": len(blackouts), "blurs": len(blurs), "muted_scenes": len(mute_scenes),
             "parts_blurred": len(parts), "burned_words": len(burned), "replaced_words": len(clips), "cut_ranges": [[round(a, 3), round(b, 3)] for a, b in cuts],
+            "mute_ranges": [[round(a, 3), round(b, 3)] for a, b in mutes],            # in the original's time:
+            "silent_ranges": [[round(a, 3), round(b, 3)] for a, b in merge_ranges(silent_blacks + mute_scenes)],
+            "mute_mode": getattr(filters, "mute_mode", "all"),
+            "voices_replaced": bool(clips),
             "replacement_slots": _slots(clips, cuts),
             "elevenlabs_characters": spoken_chars,
             "removed_seconds": round(cut_total, 1), "notes": notes,

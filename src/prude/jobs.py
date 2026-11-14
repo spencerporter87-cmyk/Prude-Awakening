@@ -21,7 +21,8 @@ STATUS_TEXT = {QUEUED: "Waiting", RUNNING: "Working", REVIEW: "Ready to review",
 
 # how much of a job's progress bar each step takes (scan first, then saving)
 STAGE_SPAN = {"gpu": (0.0, 0.02), "audio": (0.0, 0.04), "speech": (0.04, 0.35), "words": (0.35, 0.355), "subs": (0.355, 0.358), "burned": (0.358, 0.36),
-              "models": (0.36, 0.38), "frames": (0.38, 0.48), "analyze": (0.48, 0.6), "render": (0.6, 1.0)}
+              "models": (0.36, 0.38), "frames": (0.38, 0.48), "analyze": (0.48, 0.6), "render": (0.6, 0.92),
+              "check": (0.92, 1.0)}
 
 
 @dataclass
@@ -191,9 +192,20 @@ def process_job(job, settings, progress=None, cancel=None, log=print):
         return dict(found, review=True)
     if not project.active_mutes() and not project.active_scenes() and not subs_on and not paint_in_use(project):
         return dict(found, skipped="Nothing to change - no copy was made.")
-    result = render_project(project, f, settings, progress=stage_progress, cancel=cancel, log=log,
-                            export=ExportOptions.from_dict(job.export))
-    return dict(found, **{k: v for k, v in result.items() if k != "notes"})
+    opts = ExportOptions.from_dict(job.export)
+    result = render_project(project, f, settings, progress=stage_progress, cancel=cancel, log=log, export=opts)
+    out = dict(found, **{k: v for k, v in result.items() if k != "notes"})
+    if opts.check_copy and result.get("valid", True):
+        from . import leakcheck
+        try:
+            lk = leakcheck.run(project, f, settings, result=result, picture=True, listen=opts.check_listen,
+                               progress=stage_progress, cancel=cancel, log=log)
+            out["leaks"] = len(lk["findings"])
+        except Cancelled:
+            raise
+        except Exception as e:                      # noqa: BLE001 - the copy is saved; the check is a bonus
+            log(f"The check of the finished copy couldn't run: {e}")
+    return out
 
 
 def run_queue(queue, settings, on_change=None, should_stop=None, cancel=None, log_fn=None):
@@ -226,7 +238,8 @@ def run_queue(queue, settings, on_change=None, should_stop=None, cancel=None, lo
             res = process_job(job, settings, prog, cancel, jlog)
             status = REVIEW if res.get("review") else DONE
             msg = (f"Found {res['mutes']} words and {res['scenes']} scenes - open it to review" if res.get("review")
-                   else res.get("skipped") or f"Saved: {Path(res['output']).name}")
+                   else res.get("skipped") or f"Saved: {Path(res['output']).name}"
+                   + (f" - {res['leaks']} thing(s) to look at" if res.get("leaks") else ""))
             if res.get("valid") is False:
                 msg = "Saved, but the check found problems - see the log"
                 job.add_log("Check problems: " + "; ".join(res.get("problems", [])))

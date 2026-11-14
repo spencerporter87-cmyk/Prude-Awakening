@@ -137,6 +137,7 @@ class HomePage(QWidget):
 class SetupPage(QWidget):
     back = Signal()
     scan = Signal()
+    useEditList = Signal()
     savePreset = Signal(str, dict)
     trackChanged = Signal(int)
 
@@ -349,6 +350,9 @@ class SetupPage(QWidget):
         self.note.setMaximumWidth(420)
         self.note.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         foot.addWidget(self.note)
+        foot.addWidget(button("📥  Use an edit list instead…", "Link", self.useEditList.emit,
+                              tip="Someone (or you, on another PC) already went through this movie and saved an edit\n"
+                                  "list: open it here and skip the scan."))
         self.scan_btn = button("Scan movie  →", "Primary", self.scan.emit)
         foot.addWidget(self.scan_btn)
         outer.addLayout(foot)
@@ -732,6 +736,10 @@ class ReviewPage(QWidget):
     back = Signal()
     render = Signal()
     changed = Signal()
+    viewerChosen = Signal(str)
+    newViewer = Signal()
+    saveList = Signal()
+    loadList = Signal()
 
     COLS = ["On", "Time", "How sure", "Words", "What was said", "Says instead (beta)", ""]
     C_SURE, C_WORDS, C_SAID, C_SAYS, C_BTN = 2, 3, 4, 5, 6
@@ -747,6 +755,21 @@ class ReviewPage(QWidget):
         head = QHBoxLayout()
         head.addWidget(button("←  Change settings", "Link", self.back.emit))
         head.addStretch()
+        self.viewer_lab = label("Viewer", "Muted")
+        head.addWidget(self.viewer_lab)
+        self.viewer = QComboBox()
+        self.viewer.setMinimumWidth(150)
+        self.viewer.setToolTip("Each viewer (for example Kids, Teens, Family night) has their own ticked words and\n"
+                               "scenes and painted blurs. The movie is scanned only once.")
+        self.viewer.activated.connect(lambda i: self.viewerChosen.emit(self.viewer.itemText(i)))
+        head.addWidget(self.viewer)
+        head.addWidget(button("＋  New viewer…", None, self.newViewer.emit,
+                              tip="Make a second copy of this movie for someone else (a different filter preset),\n"
+                                  "without scanning again."))
+        head.addWidget(button("📤  Share edit list…", None, self.saveList.emit,
+                              tip="Save your choices for this movie as a small file (no video, no pictures)\n"
+                                  "to keep, move to another PC or share."))
+        head.addWidget(button("📥  Use an edit list…", None, self.loadList.emit))
         lay.addLayout(head)
         self.title = label("Review", "H1")
         lay.addWidget(self.title)
@@ -859,8 +882,22 @@ class ReviewPage(QWidget):
         foot.addWidget(self.go)
         lay.addLayout(foot)
 
+    def refresh_viewers(self):
+        from .. import profiles
+        names = profiles.names(self.project) if self.project else []
+        self.viewer.blockSignals(True)
+        self.viewer.clear()
+        for n in names:
+            self.viewer.addItem(n)
+        if self.project and self.project.profile:
+            self.viewer.setCurrentText(self.project.profile)
+        self.viewer.blockSignals(False)
+        self.viewer.setVisible(bool(names))
+        self.viewer_lab.setVisible(bool(names))
+
     def set_project(self, project, info, settings, filters):
         self.project, self.info, self.filters, self.settings = project, info, filters, settings
+        self.refresh_viewers()
         self.blurred = settings.blur_thumbnails
         self.show_pics.blockSignals(True)
         self.show_pics.setChecked(not self.blurred)
@@ -1233,6 +1270,8 @@ class RenderPage(QWidget):
     cancel = Signal()
     again = Signal()
     backToReview = Signal()
+    checkRequested = Signal()
+    leaksRequested = Signal()
 
     def __init__(self):
         super().__init__()
@@ -1278,6 +1317,15 @@ class RenderPage(QWidget):
         lay.addWidget(self.tl_card)
         self.notes = label("", "Muted", wrap=True)
         lay.addWidget(self.notes)
+        self.check_lab = label("", "Muted", wrap=True)          # the check of the finished copy
+        self.check_lab.setVisible(False)
+        lay.addWidget(self.check_lab)
+        self.check_bar = QProgressBar()
+        self.check_bar.setRange(0, 1000)
+        self.check_bar.setFixedHeight(8)
+        self.check_bar.setTextVisible(False)
+        self.check_bar.setVisible(False)
+        lay.addWidget(self.check_bar)
         from PySide6.QtCore import QElapsedTimer, QTimer
         self.clock = QElapsedTimer()
         self.ticker = QTimer(self)
@@ -1297,11 +1345,17 @@ class RenderPage(QWidget):
         self.folder_btn = button("Open folder", None, self._folder)
         self.compare_btn = button("Compare side by side", None, self._compare)
         self.review_btn = button("Back to review", None, self.backToReview.emit)
+        self.check_btn = button("🔎  Check for leaks", None, self.checkRequested.emit,
+                                tip="Look at the finished copy again: are the silenced words really silent, are any listed "
+                                    "words in the subtitles, is anything exposed in the picture?")
+        self.leaks_btn = button("See what it found…", "Primary", self.leaksRequested.emit)
         self.again_btn = button("Clean another movie", None, self.again.emit)
         self.btns.addStretch()
-        for b in (self.review_btn, self.again_btn, self.folder_btn, self.ext_btn, self.compare_btn, self.play_btn,
-                  self.cancel_btn):
+        for b in (self.review_btn, self.again_btn, self.folder_btn, self.ext_btn, self.compare_btn, self.check_btn,
+                  self.leaks_btn, self.play_btn, self.cancel_btn):
             self.btns.addWidget(b)
+        self.check_btn.setVisible(False)
+        self.leaks_btn.setVisible(False)
         lay.addLayout(self.btns)
         self.output = None
 
@@ -1334,8 +1388,11 @@ class RenderPage(QWidget):
         self.player.setVisible(False)
         self.spacer.setVisible(True)
         self.bar.setVisible(True)
-        for b in (self.play_btn, self.folder_btn, self.again_btn, self.review_btn, self.ext_btn, self.compare_btn):
+        for b in (self.play_btn, self.folder_btn, self.again_btn, self.review_btn, self.ext_btn, self.compare_btn,
+                  self.check_btn, self.leaks_btn):
             b.setVisible(False)
+        self.check_lab.setVisible(False)
+        self.check_bar.setVisible(False)
 
     def _tick(self):
         secs = self.clock.elapsed() / 1000 if self.clock.isValid() else 0
@@ -1392,11 +1449,52 @@ class RenderPage(QWidget):
             rows.append("<span style='color:#3C7A30'>✓ Checked: the finished file opens, and its length "
                         "and streams are as expected.</span>")
         rows += [f"• {w}" for w in result.get("warnings", result.get("notes", []))]
+        if result.get("copies"):
+            self.title.setText("✓  Your clean copies are ready")
+            rows.append("<b>Copies made:</b>")
+            for c in result["copies"]:
+                rows.append(f"• <b>{c['viewer']}</b>: {c['output']}"
+                            + (f"<br>&nbsp;&nbsp;&nbsp;{c['summary']}" if c.get("summary") else ""))
         self.notes.setTextFormat(Qt.RichText)
         self.notes.setText("<br>".join(rows))
         self.cancel_btn.setVisible(False)
         for b in (self.play_btn, self.folder_btn, self.again_btn, self.review_btn, self.ext_btn, self.compare_btn):
             b.setVisible(True)
+        self.check_btn.setText("🔎  Check for leaks")
+        self.check_btn.setVisible(not result.get("copies"))     # with several copies, each one was checked on its own
+        self.leaks_btn.setVisible(False)
+        self.check_lab.setVisible(False)
+        self.check_bar.setVisible(False)
+
+    # ------------------------------------------------------------ the check of the finished copy
+    def check_started(self):
+        self.check_btn.setVisible(False)
+        self.leaks_btn.setVisible(False)
+        self.check_lab.setText("🔎  Checking the finished copy…")
+        self.check_lab.setVisible(True)
+        self.check_bar.setRange(0, 0)
+        self.check_bar.setVisible(True)
+
+    def on_check_progress(self, _stage, frac, msg):
+        if self.check_bar.maximum() == 0 and frac > 0:
+            self.check_bar.setRange(0, 1000)
+        if self.check_bar.maximum():
+            self.check_bar.setValue(int(frac * 1000))
+        self.check_lab.setText(f"🔎  Checking the finished copy… {msg} ({int(frac * 100)}%)")
+
+    def check_done(self, leaks):
+        self.check_bar.setVisible(False)
+        self.check_lab.setText(leaks.get("summary", ""))
+        self.check_lab.setVisible(True)
+        self.check_btn.setText("🔎  Check again")
+        self.check_btn.setVisible(True)
+        self.leaks_btn.setVisible(bool(leaks.get("findings")))
+
+    def check_failed(self, msg):
+        self.check_bar.setVisible(False)
+        self.check_lab.setText(f"The check couldn't run: {msg[:200]}")
+        self.check_lab.setVisible(True)
+        self.check_btn.setVisible(True)
 
     def show_result(self, result, project, filters, duration):
         """Player for the clean copy + timeline of what changed (in the clean copy's time)."""

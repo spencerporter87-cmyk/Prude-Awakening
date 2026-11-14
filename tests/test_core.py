@@ -1836,3 +1836,265 @@ def test_edited_preview_clock_skips_the_cuts():
     assert clip_to_movie(1.0, [[3.0, 5.0]]) == 1.0                       # before the cut
     assert clip_to_movie(3.5, [[3.0, 5.0]]) == 5.5                       # after it: 2 s were taken out
     assert clip_to_movie(9.0, [[6.0, 7.0], [2.0, 4.0]]) == 12.0          # two cuts, any order
+
+
+# ---------------------------------------------------------------- leak check (a second look at the finished copy)
+
+def test_leak_check_time_mapping_round_trips():
+    from prude.leakcheck import movie_to_out, out_to_movie
+    cuts = [(6.0, 9.0), (20.0, 21.5)]
+    assert movie_to_out(5.0, cuts) == 5.0
+    assert movie_to_out(10.0, cuts) == 7.0                        # 3 s were taken out before it
+    assert movie_to_out(30.0, cuts) == 25.5
+    for t in (0.0, 5.9, 12.0, 40.0):          # (a moment inside a cut has no counterpart)
+        assert out_to_movie(movie_to_out(t, cuts), cuts) == pytest.approx(t, abs=1e-6)
+
+
+def test_leak_check_measures_silences():
+    import numpy as np
+    from prude.leakcheck import RATE, silenced_words
+    t = np.arange(10 * RATE) / RATE
+    x = (0.3 * np.sin(2 * np.pi * 440 * t)).astype("float32")
+    x[2 * RATE:3 * RATE] = 0.0                                    # a really silenced word
+    found = silenced_words(x, [(2.0, 3.0), (5.0, 6.0), (7.0, 7.05)], [], lambda a, b: f"w{int(a)}")
+    assert [f["start"] for f in found] == [5.0]                  # the loud one; the tiny span is too short to judge
+    assert found[0]["kind"] == "mute" and found[0]["text"] == "w5"
+
+
+def test_leak_check_on_a_real_copy(media_dir, fake_words, tmp_path):
+    from prude import leakcheck
+    src = media_dir / "movie51.mkv"
+    f = FilterOptions(words=["mild", "blasphemy", "strong"])
+    s = Settings()
+    p = _project(src, fake_words)
+    pipeline.find_word_mutes(p, f)
+    p.scenes = [{"id": "c", "kind": "violence", "label": "V", "start": 6.5, "end": 8.0, "on": True, "action": "cut"}]
+    out = tmp_path / "clean.mkv"
+    res = pipeline.render_project(p, f, s, out)
+    assert res["cuts"] == 1 and res["mute_ranges"]
+    lk = leakcheck.run(p, f, s, result=res, picture=False)
+    assert lk["findings"] == [], lk["findings"]                   # a good copy: nothing to report (cuts shift the clock)
+    assert "silenced words" in lk["ran"] and "subtitles" in lk["ran"]
+    assert lk["summary"].startswith("✓")
+    # plant leaks: a loud stretch claimed as silenced, and a bad word in the subtitles
+    bad = dict(res, mute_ranges=res["mute_ranges"] + [[12.0, 13.0]])
+    out.with_name("clean.en.srt").write_text("1\n00:00:01,000 --> 00:00:02,000\nWhat the hell?\n", encoding="utf-8")
+    lk = leakcheck.run(p, f, s, result=bad, picture=False)
+    kinds = {x["kind"]: x for x in lk["findings"]}
+    assert set(kinds) == {"mute", "subtitle"}, lk["findings"]
+    m = kinds["mute"]
+    assert m["start"] == pytest.approx(12.0, abs=0.01) and m["out_start"] == pytest.approx(10.5, abs=0.01)   # 1.5 s cut before it
+    assert "2 things" in lk["summary"] or "2 thing" in lk["summary"]
+    # a finding you dismiss doesn't come back
+    leakcheck.dismiss(p, kinds["subtitle"]["id"])
+    lk = leakcheck.run(p, f, s, result=bad, picture=False)
+    assert [x["kind"] for x in lk["findings"]] == ["mute"]
+    assert Project.open(src).leaks["dismissed"]                    # remembered on disk
+
+
+def test_leak_check_picture_pass_respects_your_choices(media_dir, fake_words, tmp_path, monkeypatch):
+    from prude import leakcheck, paint, scenes as scene_mod
+    src = media_dir / "movie51.mkv"
+    f = FilterOptions(words=[], scenes=["nude_f_breasts"], sensitivity=3)
+    p = _project(src, fake_words)
+    p.scenes = [{"id": "kept", "kind": "nudity", "label": "Nudity", "start": 15.0, "end": 16.0, "on": False}]
+    p.paint = [dict(paint.new_patch(8.0, 9.0, mode="clear"), strokes=[{"pts": [[0.5, 0.5]], "r": 0.1}])]
+    out = tmp_path / "clean.mkv"
+    res = pipeline.render_project(p, FilterOptions(words=[]), Settings(), out)
+    seen = {}
+
+    def fake_watch(info, work, models, filters, progress=None, cancel=None, log=print, phase=0.0):
+        seen["phase"], seen["sens"] = phase, filters.sensitivity
+        return [{"kind": "nudity", "label": "Nudity", "detail": "female breasts", "start": 3.0, "end": 4.0,
+                 "score": 0.8, "why": "x"},
+                {"kind": "nudity", "label": "Nudity", "detail": "", "start": 8.0, "end": 9.0, "score": 0.7},
+                {"kind": "nudity", "label": "Nudity", "detail": "", "start": 15.0, "end": 16.0, "score": 0.6}]
+    monkeypatch.setattr(scene_mod, "watch", fake_watch)
+    lk = leakcheck.run(p, f, Settings(), result=res, picture=True)
+    assert [x["start"] for x in lk["findings"] if x["kind"] == "picture"] == [3.0]   # not the one you unblurred, nor the one you left in
+    assert seen == {"phase": leakcheck.PHASE, "sens": 4}                             # a notch stricter, on different instants
+    # no nudity filter -> the picture pass is skipped, and says so
+    lk = leakcheck.run(p, FilterOptions(words=[]), Settings(), result=res, picture=True)
+    assert any("picture" in x for x in lk["skipped"])
+
+
+def test_scene_scan_can_look_at_different_instants(tmp_path):
+    from prude.scenes import frame_time
+    assert frame_time(Path("000001.jpg")) == 0.0
+    assert frame_time(Path("000003.jpg"), 1.0, 0.5) == 2.5
+
+
+# ---------------------------------------------------------------- edit lists, viewers, finding a moved movie
+
+def test_project_is_found_again_when_the_file_moves(media_dir, fake_words, tmp_path):
+    import shutil
+    src = media_dir / "movie51.mkv"
+    p = _project(src, fake_words)
+    p.mutes = [{"id": "m1", "start": 5.0, "end": 5.5, "words": "hell", "on": False}]
+    p.save()
+    moved = tmp_path / "elsewhere" / "Renamed Movie.mkv"
+    moved.parent.mkdir()
+    shutil.copy2(src, moved)
+    q = Project.open(moved)
+    assert q.source == str(moved.resolve())
+    assert q.mutes and q.mutes[0]["on"] is False and q.transcript["words"]           # your work came with it
+    assert not Project.open(media_dir / "old.avi").mutes                             # a different movie starts fresh
+
+
+def _scanned(src, fake_words, words):
+    p = _project(src, fake_words)
+    f = FilterOptions(words=words)
+    pipeline.scan(p, f, Settings())
+    return p, f
+
+
+def test_edit_list_round_trip_and_matching(media_dir, fake_words, tmp_path):
+    import json
+    import shutil
+    from dataclasses import asdict
+    from prude import editlist, paint
+    src = media_dir / "movie51.mkv"
+    p, f = _scanned(src, fake_words, ["mild", "blasphemy", "strong"])
+    p.scenes = [{"id": "s1", "kind": "violence", "label": "Fight", "start": 6.0, "end": 8.0, "on": True,
+                 "thumb": "C:/x/t.jpg", "frame": "C:/x/f.jpg", "action": "cut"}]
+    patch = dict(paint.new_patch(9.0, 10.0), keys=[{"t": 9.5, "dx": 0.1, "dy": 0.0, "scale": 1.0}],
+                 strokes=[{"pts": [[0.4, 0.4]], "r": 0.1}])
+    p.paint = [patch]
+    p.profile = "Family"
+    info = probe(src)
+    doc = editlist.build(p, info, {"Family": editlist.snapshot(p, asdict(f), portable=True)}, "Family")
+    dest = editlist.write(tmp_path / "Movie", doc)
+    text = dest.read_text(encoding="utf-8")
+    assert dest.suffix == ".prudeedit" and len(text) < 20000
+    assert "C:/x" not in text and "transcript" not in text and "dialogue" not in text      # nothing local, no dialogue
+    got = editlist.read(dest)
+    # the same movie, moved: matches exactly; applying gives back every choice
+    moved = tmp_path / "copy.mkv"
+    shutil.copy2(src, moved)
+    assert editlist.compare(got, moved, probe(moved))["match"] == "exact"
+    q = Project.open(tmp_path / "other.mkv") if False else Project(source=str(moved))
+    name, filt = editlist.apply(q, got)
+    assert name == "Family" and q.profile == "Family" and filt["words"] == ["mild", "blasphemy", "strong"]
+    assert [m["start"] for m in q.mutes] == [m["start"] for m in p.mutes] and len(q.mutes) == len(p.mutes) > 0
+    assert q.scenes[0]["label"] == "Fight" and "thumb" not in q.scenes[0]
+    assert q.paint[0]["keys"][0]["t"] == 9.5
+    # a re-encode of the same length matches by length; a different movie does not
+    got["movie"]["content_id"] = "someone-elses"
+    assert editlist.compare(got, moved, probe(moved))["match"] == "same_length"
+    assert editlist.compare(got, media_dir / "pgs.mkv", probe(media_dir / "pgs.mkv"))["match"] in ("same_length", "different")
+    got["movie"]["duration"] = 7000
+    assert editlist.compare(got, moved, probe(moved))["match"] == "different"
+    # shifting for a version that starts 2 s later moves everything, painted key frames included
+    r = Project(source=str(moved))
+    editlist.apply(r, got, offset=2.0)
+    assert r.mutes[0]["start"] == pytest.approx(p.mutes[0]["start"] + 2.0) and r.paint[0]["keys"][0]["t"] == 11.5
+    # adding to what is there doesn't duplicate
+    editlist.apply(r, got, merge=True)
+    assert len(r.mutes) == len(p.mutes)
+    # bad files say so plainly
+    (tmp_path / "bad.prudeedit").write_text("{}")
+    with pytest.raises(editlist.EditListError):
+        editlist.read(tmp_path / "bad.prudeedit")
+    got["version"] = 99
+    (tmp_path / "new.prudeedit").write_text(json.dumps(got))
+    with pytest.raises(editlist.EditListError, match="newer"):
+        editlist.read(tmp_path / "new.prudeedit")
+
+
+def test_viewers_share_one_scan(media_dir, fake_words, tmp_path, monkeypatch):
+    from dataclasses import asdict
+    from prude import profiles
+    src = media_dir / "movie51.mkv"
+    p, fam = _scanned(src, fake_words, ["strong"])
+    profiles.ensure_live(p, "Family")
+    p.mutes[0]["on"] = False                                           # a choice made for the family
+    fam_id = p.mutes[0]["id"]
+    p.mutes.append({"id": "mine", "start": 1.0, "end": 1.3, "words": "(added)", "on": True, "manual": True})
+    kids = FilterOptions(words=["strong", "mild", "blasphemy"])
+    n_family = len(p.mutes)
+    profiles.create(p, "Kids", kids, Settings(), live_filters=asdict(fam))
+    assert p.profile == "Kids" and profiles.names(p) == ["Kids", "Family"]
+    assert len(p.mutes) > n_family - 1                                  # more words for the kids...
+    assert any(m.get("manual") and m["start"] == 1.0 for m in p.mutes)  # ...and what you added by hand came along
+    assert all(m["on"] for m in p.mutes if not m.get("manual"))         # the family's unticked word is NOT inherited
+    kid = next(m for m in p.mutes if not m.get("manual"))
+    kid["on"] = False                                                  # a kids-only choice
+    kid_id = kid["id"]
+    back = profiles.switch(p, "Family", asdict(kids))
+    assert p.profile == "Family" and back["words"] == ["strong"] and len(p.mutes) == n_family
+    assert next(m for m in p.mutes if m["id"] == fam_id)["on"] is False   # the family's choice survived the round trip
+    profiles.switch(p, "Kids", back)
+    assert next(m for m in p.mutes if m["id"] == kid_id)["on"] is False and "Family" in p.profiles
+    with pytest.raises(ValueError):
+        profiles.create(p, "Family", kids, Settings())                  # names are unique
+    # saved and reopened: both viewers are still there
+    p.save()
+    q = Project.open(src)
+    assert profiles.names(q) == ["Kids", "Family"]
+    # cancelling while adding a viewer puts everything back
+    from prude.media import Cancelled
+
+    def boom(*a, **k):
+        raise Cancelled()
+    monkeypatch.setattr(pipeline, "scan", boom)
+    before = (p.profile, [m["id"] for m in p.mutes])
+    with pytest.raises(Cancelled):
+        profiles.create(p, "Teens", FilterOptions(words=["strong"]), Settings(), live_filters=asdict(kids))
+    assert (p.profile, [m["id"] for m in p.mutes]) == before and profiles.names(p) == ["Kids", "Family"]
+    # viewers travel in an edit list
+    from prude import editlist
+    doc = editlist.build(p, probe(src), profiles.snapshots(p, asdict(kids)), "Kids")
+    r = Project(source=str(src))
+    assert profiles.import_doc(r, doc) == {"Kids": "Kids", "Family": "Family"}
+    assert set(r.profiles) == {"Kids", "Family"}
+    assert profiles.import_doc(r, doc)["Kids"] == "Kids (imported)"
+    # opening a list in a movie with nothing in it leaves no empty viewer behind
+    t = Project(source=str(src))
+    name, filt = profiles.open_doc(t, doc)
+    assert name == "Kids" and t.profile == "Kids" and profiles.names(t) == ["Kids", "Family"] and t.mutes and filt["words"]
+
+
+def test_one_copy_per_viewer(media_dir, fake_words, tmp_path):
+    from dataclasses import asdict
+    from prude import profiles
+    from prude.export import ExportOptions
+    src = media_dir / "movie51.mkv"
+    p, fam = _scanned(src, fake_words, ["strong"])
+    profiles.ensure_live(p, "Family")
+    profiles.create(p, "Kids", FilterOptions(words=["strong", "mild", "blasphemy"]), Settings(),
+                    live_filters=asdict(fam))
+    profiles.switch(p, "Family", asdict(FilterOptions(words=["strong", "mild", "blasphemy"])))
+    opts = ExportOptions(folder=str(tmp_path / "lib"), naming="plex_library")           # would collide: is adjusted
+    seen = []
+    res = profiles.render_all(p, Settings(), ["Family", "Kids"], opts, live_filters=asdict(fam),
+                              progress=lambda s, f, m: seen.append(f), log=lambda m: None)
+    outs = [Path(r["output"]) for _n, r in res]
+    assert [n for n, _r in res] == ["Family", "Kids"] and all(o.exists() for o in outs)
+    assert "{edition-Family Edit}" in outs[0].name and "{edition-Kids Edit}" in outs[1].name
+    assert all("leaks" in r for _n, r in res)                         # each copy got its second look
+    assert p.profile == "Family" and seen and max(seen) <= 1.0        # the viewer who was live is live again
+    # plain naming keeps the files apart too
+    simple = ExportOptions(folder=str(tmp_path / "s"), naming="simple")
+    a = profiles.viewer_options(simple, "Kids", True)
+    from prude.export import output_path as export_path
+    assert export_path(src, a).name == "movie51 (Kids).mkv"
+
+
+def test_command_line_edit_list_and_check(media_dir, fake_words, tmp_path, monkeypatch, capsys):
+    from prude import cli
+    src = media_dir / "movie51.mkv"
+    p, f = _scanned(src, fake_words, ["mild", "blasphemy", "strong"])          # a saved transcript to work from
+    p.save()
+    lst = tmp_path / "m.prudeedit"
+    out = tmp_path / "clean.mkv"
+    assert cli.main([str(src), "--words", "mild,blasphemy,strong", "--scenes", "", "--scan-only", "--save-edit-list", str(lst)]) == 0
+    assert lst.exists() and "Edit list saved" in capsys.readouterr().out
+    # someone else: no scan at all, just the list (a fresh settings folder means no saved transcript)
+    other = tmp_path / "theirs.mkv"
+    import shutil
+    shutil.copy2(src, other)
+    monkeypatch.setenv("PRUDE_DATA_DIR", str(tmp_path / "fresh"))
+    assert cli.main([str(other), "--edit-list", str(lst), "--out", str(out), "--check"]) == 0
+    text = capsys.readouterr().out
+    assert "same file" in text and "Done:" in text and "Nothing slipped through" in text
+    assert out.exists()

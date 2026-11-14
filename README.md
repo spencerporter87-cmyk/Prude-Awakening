@@ -26,6 +26,16 @@ Mutes bad language and removes scenes you'd rather not see — automatically, on
 7. **Foreign-language films** (e.g. Apocalypto): the dialogue is left alone, the English
    subtitles are cleaned and set to show automatically.
 
+8. **Check the finished copy** (on by default): after saving, the app listens to the new file for
+   words that are still audible, re-reads its subtitles, and takes a second, stricter look at the
+   picture for the kinds of scenes you filtered. Anything it finds is listed with a time and a jump
+   to the Review screen. It is a safety net, not a guarantee, so it can miss things or flag harmless ones.
+9. **Edit lists**: *Save edit list* writes your mutes, scenes, painted blurs and filters to a small
+   `.prudeedit` file. A family member with the same movie can open it and skip the scan entirely.
+   The app tells them whether the file matches exactly, matches in length, or looks like a different cut.
+10. **Viewers**: each person in the house can have their own settings (for example a stricter one
+    for the kids). They share one scan, and *Save* can make one copy per viewer, named so they never collide.
+
 Your movies, transcripts and choices never leave your computer.
 
 ## Install
@@ -45,12 +55,14 @@ offers a one-time 1.2 GB "speed-up pack" (NVIDIA cuBLAS/cuDNN) that makes scanni
 pip install -r requirements.txt
 python -m prude.gui              # the app   (run from src/)
 python -m prude movie.mkv        # command line
+python -m prude movie.mkv --save-edit-list movie.prudeedit   # keep your choices as a file
+python -m prude movie.mkv --edit-list movie.prudeedit --check # use a list, then check the copy
 python -m pytest tests
 ```
 
 Every push runs the unit tests on Linux (`.github/workflows/tests.yml`, a few minutes). The full Windows
 build (installer, packaged self-test, end-to-end test with real speech and models, screenshot tour) is slower,
-so it runs only on request: Actions → *Build and test (Windows)* → *Run workflow*, or push a tag like `v3.6.0`
+so it runs only on request: Actions → *Build and test (Windows)* → *Run workflow*, or push a tag like `v3.7.0`
 to publish a release.
 
 To build the installer on your own PC instead (no GitHub minutes), install Python 3.12 and Inno Setup 6, then run

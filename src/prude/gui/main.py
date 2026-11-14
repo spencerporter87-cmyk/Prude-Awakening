@@ -8,9 +8,9 @@ from dataclasses import asdict
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import (QApplication, QFileDialog, QMainWindow, QMessageBox, QStackedWidget)
+from PySide6.QtWidgets import (QApplication, QFileDialog, QInputDialog, QMainWindow, QMessageBox, QStackedWidget)
 
-from .. import APP_NAME, __version__, models
+from .. import APP_NAME, __version__, models, profiles
 from ..media import MediaError, pick_audio_track, probe
 from ..paths import app_data_dir
 from ..pipeline import render_project, scan
@@ -90,6 +90,13 @@ class MainWindow(QMainWindow):
         self.renderp.cancel.connect(self.cancel_work)
         self.renderp.again.connect(lambda: (self.renderp.leave(), self.go_home()))
         self.renderp.backToReview.connect(self._back_to_review)
+        self.setup.useEditList.connect(lambda: self._load_edit_list())
+        self.review.viewerChosen.connect(self._switch_viewer)
+        self.review.newViewer.connect(self._new_viewer)
+        self.review.saveList.connect(self._save_edit_list)
+        self.review.loadList.connect(lambda: self._load_edit_list())
+        self.renderp.checkRequested.connect(self._run_check)
+        self.renderp.leaksRequested.connect(self._show_leaks)
         self.setAcceptDrops(True)
         self.home.updateNow.connect(self.install_update)
         self._update_info = None
@@ -195,6 +202,8 @@ class MainWindow(QMainWindow):
             self.error("Can't open this file", str(e))
             return
         self.info, self.project = info, Project.open(source)
+        if not profiles.is_empty(self.project):
+            profiles.ensure_live(self.project, self.settings.last_preset or "")
         f = FilterOptions.from_dict(filters)
         self._filters = f
         self.setup.set_movie(info, self.project, self.settings, self._scan_note())
@@ -378,6 +387,7 @@ class MainWindow(QMainWindow):
     def _scan_done(self, project):
         self.scanp.finish()
         self.worker = None
+        profiles.ensure_live(self.project, self.settings.last_preset or "")
         self.review.set_project(self.project, self.info, self.settings, self._filters)
         self.stack.setCurrentWidget(self.review)
 
@@ -417,17 +427,20 @@ class MainWindow(QMainWindow):
             (f.advanced or {}).get("mode") == "replace_lipsync"
         removed = sum(b - a for a, b in r["cut"])
         preset = self.settings.last_preset if self.settings.last_preset != "Custom" else ""
+        viewers = profiles.names(self.project)
         dlg = ExportDialog(self.project.source, self.info, opts, reencode, removed,
-                           f"{preset} Edit" if preset else "", self)
+                           f"{preset} Edit" if preset else "", self, viewers=viewers if len(viewers) > 1 else ())
         if not dlg.exec():
             return
         opts, out = dlg.options(), dlg.output()
+        which = dlg.selected_viewers()
+        many = bool(which) and (len(which) > 1 or which[0] != self.project.profile)
         self.settings.export = opts.to_dict()
         self.settings.save()
         if Path(out).resolve() == Path(self.project.source).resolve():
             self.error("Can't overwrite the original", "Choose a different name or folder.")
             return
-        if out.exists():
+        if out.exists() and not many:
             q = QMessageBox.question(self, "Replace?", f"{out.name} already exists. Replace it?")
             if q != QMessageBox.Yes:
                 return
@@ -451,27 +464,219 @@ class MainWindow(QMainWindow):
                 self.project.spend_ok = True          # everything is already made (nothing to pay for)
         resized = opts.resolution != "source" and self.info.height and self.info.height > int(opts.resolution) + 8
         self._filters_used = f
+        self._export_opts = opts
+        self._last_result = None
         self.review.leave()
         self.renderp.start(Path(self.project.source).name, out, reencode or resized, self.project, f,
                            self.info.duration)
         self.stack.setCurrentWidget(self.renderp)
-        self.worker = Worker(render_project, self.project, f, self.settings, out, export=opts)
+        if many:                                   # one copy for each ticked viewer
+            self.worker = Worker(profiles.render_all, self.project, self.settings, which, opts,
+                                 live_filters=asdict(f), check=opts.check_copy, listen=opts.check_listen)
+            self.worker.finished_ok.connect(self._render_many_done)
+        else:
+            self.worker = Worker(render_project, self.project, f, self.settings, out, export=opts)
+            self.worker.finished_ok.connect(self._render_done)
         self.worker.progress.connect(self.renderp.on_progress)
         self.worker.log.connect(lambda m: log.info(m))
-        self.worker.finished_ok.connect(self._render_done)
         self.worker.failed.connect(self._failed)
         self.worker.cancelled.connect(self._cancelled)
         self.worker.start()
 
+    def _render_many_done(self, pairs):
+        self.worker = None
+        log.info("Render (several viewers) done %s", [(n, r.get("output")) for n, r in pairs])
+        shown = next((r for n, r in pairs if n == self.project.profile), pairs[-1][1])
+        result = dict(shown, copies=[{"viewer": n, "output": r["output"], "summary": r.get("leak_summary", "")}
+                                     for n, r in pairs])
+        self._last_result = None                  # each copy was checked on its own; nothing to re-check here
+        self.renderp.show_result(result, self.project, self._filters_used, self.info.duration)
+        self.review.refresh_viewers()
+
+    # ------------------------------------------------------------ viewers and edit lists
+    def _live_filters(self):
+        return asdict(getattr(self, "_filters", None) or self.setup.filters())
+
+    def _adopt_filters(self, filt):
+        """A viewer went live: show their filters and choices."""
+        f = FilterOptions.from_dict(filt) if filt else (getattr(self, "_filters", None) or self.setup.filters())
+        self._filters = f
+        self.setup.apply(f)
+        self.review.set_project(self.project, self.info, self.settings, f)
+        self.stack.setCurrentWidget(self.review)
+
+    def _switch_viewer(self, name):
+        if self.busy() or not self.project or name == self.project.profile:
+            return
+        try:
+            filt = profiles.switch(self.project, name, self._live_filters())
+        except KeyError as e:
+            self.error("Can't switch viewer", str(e))
+            self.review.refresh_viewers()
+            return
+        self._adopt_filters(filt)
+
+    def _new_viewer(self):
+        if self.busy() or not self.project:
+            return
+        if not self.project.has_transcript(self.project.audio_track):
+            QMessageBox.information(self, "Scan the movie first",
+                                    "A new viewer reuses the scan of this movie. Scan it once first "
+                                    "(← Change settings, then Scan movie), then add viewers.")
+            return
+        presets = self.settings.all_presets()
+        free = [n for n in presets if n not in profiles.names(self.project)]
+        if not free:
+            QMessageBox.information(self, "Every preset has a viewer",
+                                    "Each of your presets is already a viewer of this movie. Make another preset first "
+                                    "(← Change settings, choose filters, then Save as preset…).")
+            return
+        name, ok = QInputDialog.getItem(self, "New viewer", "Who is this copy for? Pick their filter preset.\n"
+                                        "The movie is not scanned again - the scan you already have is reused.",
+                                        free, 0, False)
+        if not ok or not name:
+            return
+        f = FilterOptions.from_dict(presets[name])
+        want_scenes = bool(f.scenes or f.scene_descriptions)
+        want_clip = any(k in CLIP_FOR for k in f.scenes) or bool(f.scene_descriptions.strip())
+        stages = ["words", "subs"]
+        if want_scenes:
+            if want_clip and not models.clip_ready(self.settings.models_path):
+                stages.append("models")
+            stages += ["frames", "analyze"]
+        self.scanp.start(Path(self.project.source).name, stages, ("audio", "speech"))
+        self.stack.setCurrentWidget(self.scanp)
+        self.review.leave()
+        self.worker = Worker(profiles.create, self.project, name, f, self.settings, live_filters=self._live_filters())
+        self.worker.progress.connect(self.scanp.on_progress)
+        self.worker.log.connect(self._log)
+        self.worker.finished_ok.connect(lambda _p, f=f: self._viewer_ready(f))
+        self.worker.failed.connect(self._viewer_failed)
+        self.worker.cancelled.connect(lambda: self._viewer_failed("Cancelled."))
+        self.worker.start()
+
+    def _viewer_ready(self, f):
+        self.scanp.finish()
+        self.worker = None
+        self._adopt_filters(asdict(f))
+
+    def _viewer_failed(self, msg, details=""):
+        self.worker = None
+        self.stack.setCurrentWidget(self.review)
+        self.review.refresh_viewers()
+        if msg != "Cancelled.":
+            self.error("Couldn't add the viewer", msg, details)
+
+    def _save_edit_list(self):
+        from .. import editlist
+        proj = self.project
+        if not proj or self.busy():
+            return
+        profiles.ensure_live(proj, self.settings.last_preset or "")
+        self.review.refresh_viewers()
+        default = Path(proj.source).with_name(f"{Path(proj.source).stem} - {proj.profile}{editlist.EXT}")
+        path, _ = QFileDialog.getSaveFileName(self, "Save the edit list", str(default),
+                                              f"Prude Awakening edit list (*{editlist.EXT})")
+        if not path:
+            return
+        snaps = profiles.snapshots(proj, self._live_filters())
+        try:
+            dest = editlist.write(path, editlist.build(proj, self.info, snaps, proj.profile))
+        except OSError as e:
+            self.error("Couldn't save the edit list", str(e))
+            return
+        QMessageBox.information(
+            self, "Edit list saved",
+            f"Saved {dest.name} with {len(snaps)} viewer{'s' if len(snaps) != 1 else ''}.\n\n"
+            "It holds only times, words and shapes - not the movie, pictures or dialogue - so it is small and safe "
+            "to share. Open it on a copy of the same movie with “Use an edit list”.")
+
+    def _load_edit_list(self):
+        from .. import editlist
+        proj = self.project
+        if not proj or self.busy():
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Open an edit list", str(Path(proj.source).parent),
+                                              f"Prude Awakening edit list (*{editlist.EXT})")
+        if not path:
+            return
+        try:
+            doc = editlist.read(path)
+            cmp = editlist.compare(doc, proj.source, self.info)
+        except (editlist.EditListError, OSError) as e:
+            self.error("Can't use this edit list", str(e))
+            return
+        if cmp["match"] == "different":
+            q = QMessageBox.question(self, "A different version of the movie?",
+                                     cmp["message"] + "\n\nUse it anyway?")
+            if q != QMessageBox.Yes:
+                return
+        try:
+            name, filt = profiles.open_doc(proj, doc, self._live_filters())
+        except Exception as e:                      # noqa: BLE001
+            self.error("Can't use this edit list", str(e))
+            return
+        proj.save()
+        self._adopt_filters(filt)
+        QMessageBox.information(self, "Edit list opened",
+                                f"Opened the viewer “{name}”. {cmp['message']}\n\nCheck it in the review, then make the "
+                                "clean copy.")
+
     def _back_to_review(self):
         self.renderp.leave()
+        if getattr(self, "_review_stale", False):         # words were muted from the check's list
+            self._review_stale = False
+            self.review._fill_words()
+            self.review._update()
         self.review.player.load(self.project.source)
         self.stack.setCurrentWidget(self.review)
 
     def _render_done(self, result):
         self.worker = None
         log.info("Render done %s", result)
+        self._last_result = result
         self.renderp.show_result(result, self.project, self._filters_used, self.info.duration)
+        opts = getattr(self, "_export_opts", None)
+        if opts is not None and opts.check_copy and result.get("valid", True):
+            self._run_check()
+
+    # ------------------------------------------------------------ the check of the finished copy
+    def _run_check(self):
+        if self.worker is not None and self.worker.isRunning():
+            return
+        if not getattr(self, "_last_result", None):
+            return
+        from .. import leakcheck
+        opts = getattr(self, "_export_opts", None)
+        self.renderp.check_started()
+        self.worker = Worker(leakcheck.run, self.project, self._filters_used, self.settings,
+                             result=self._last_result, picture=True, listen=bool(opts and opts.check_listen))
+        self.worker.progress.connect(self.renderp.on_check_progress)
+        self.worker.log.connect(lambda m: log.info(m))
+        self.worker.finished_ok.connect(self._check_done)
+        self.worker.failed.connect(self._check_failed)
+        self.worker.cancelled.connect(lambda: self._check_failed("cancelled"))
+        self.worker.start()
+
+    def _check_done(self, leaks):
+        self.worker = None
+        self.renderp.check_done(leaks)
+        if leaks.get("findings"):
+            self._show_leaks()
+
+    def _check_failed(self, msg, _details=""):
+        self.worker = None
+        log.error("Leak check failed: %s", msg)
+        self.renderp.check_failed(msg)
+
+    def _show_leaks(self):
+        from .leak_dialog import LeakDialog
+        d = LeakDialog(self.project, self.settings, self)
+        d.paintRequested.connect(lambda at: self.review._paint(None, at=at, mode="blur"))
+        d.changed.connect(lambda: setattr(self, "_review_stale", True))
+        d.backToReview.connect(self._back_to_review)
+        d.exec()
+        self.renderp.check_done(self.project.leaks or {})
 
     # ------------------------------------------------------------ window
     def closeEvent(self, e):

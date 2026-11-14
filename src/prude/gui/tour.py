@@ -185,6 +185,27 @@ def run_tour(app, out_dir: Path, video=None):
         add(lambda: w.renderp.player.seek_to(6.0), 1200)
         add(lambda: shot("7-done"))
 
+        def leaks_shot():
+            from .leak_dialog import LeakDialog
+            w.project.leaks = {
+                "summary": "⚠ 3 things to look at - 1 in the picture, 1 silences that aren't, 1 in the subtitles.",
+                "ran": ["silenced words", "subtitles", "picture"], "skipped": ["listening again (not asked for)"],
+                "dismissed": [], "approximate": False,
+                "findings": [
+                    {"id": "a1", "kind": "picture", "text": "female breasts", "detail": "body-part detector 71%; "
+                     "whole-picture check 64% explicit", "start": 5075.0, "end": 5077.0, "out_start": 4980.0,
+                     "out_end": 4982.0, "score": 0.71},
+                    {"id": "a2", "kind": "mute", "text": "hell", "detail": "Should be silent, but it measures -31 dB.",
+                     "start": 9.8, "end": 10.4, "out_start": 9.8, "out_end": 10.4, "score": 0.7},
+                    {"id": "a3", "kind": "subtitle", "text": "Get the sh*t out of here, you b*stard", "detail": "In English.",
+                     "start": 14.0, "end": 15.0, "out_start": 14.0, "out_end": 15.0, "score": 1.0}]}
+            w.renderp.check_done(w.project.leaks)
+            w._leak_dlg = LeakDialog(w.project, w.settings, w)
+            w._leak_dlg.show()
+        add(leaks_shot, 800)
+        add(lambda: (w._leak_dlg.grab().save(str(Path(out_dir) / "7c-leaks.png")), w._leak_dlg.close(),
+                     shot("7d-done-with-check")), 700)
+
         def compare():
             from .compare import CompareDialog
             d = CompareDialog(str(video), str(video), [[10.0, 14.5]], [(5.0, "silenced: hell")], 0, 30.0, w)

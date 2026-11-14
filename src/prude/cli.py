@@ -2,6 +2,9 @@
 
   prude movie.mkv                              scan + render with saved settings
   prude movie.mkv --words strong,mild --scenes nudity,violence --describe "smoking"
+  prude movie.mkv --save-edit-list movie.prudeedit      keep your choices as a small shareable file
+  prude movie.mkv --edit-list movie.prudeedit           skip the scan: use someone's edit list
+  prude movie.mkv --check                               afterwards, look for anything that slipped through
 """
 
 import argparse
@@ -37,6 +40,10 @@ def main(argv=None):
     p.add_argument("--out")
     p.add_argument("--scan-only", action="store_true")
     p.add_argument("--rescan", action="store_true", help="forget the saved transcript and scenes")
+    p.add_argument("--edit-list", help="use this edit list (.prudeedit) instead of scanning")
+    p.add_argument("--save-edit-list", help="after the scan, write your choices to this edit list")
+    p.add_argument("--check", action="store_true", help="after saving, check the finished copy for leaks")
+    p.add_argument("--listen", action="store_true", help="with --check: also transcribe the finished copy again")
     p.add_argument("--summary-json", help="write a JSON summary here")
     p.add_argument("--version", action="version", version=__version__)
     a = p.parse_args(argv)
@@ -85,18 +92,41 @@ def main(argv=None):
             print(f"  [{stage}] {pct:3d}%  {msg}", flush=True)
 
     try:
-        scan(project, f, settings, progress)
+        if a.edit_list:
+            from . import editlist, profiles
+            doc = editlist.read(a.edit_list)
+            cmp = editlist.compare(doc, src, info)
+            print(f"Edit list: {cmp['message']}")
+            name, filt = profiles.open_doc(project, doc)
+            if filt:
+                f = FilterOptions.from_dict(filt)
+            print(f"Using the viewer “{name}” from the edit list.")
+        else:
+            scan(project, f, settings, progress)
         print(f"Found {len(project.mutes)} mutes and {len(project.scenes)} scenes.")
         for m in project.mutes:
             print(f"  mute  {m['start']:8.2f}-{m['end']:8.2f}  [{m.get('category')}] {m['words']}")
         for s in project.scenes:
             print(f"  scene {s['start']:8.2f}-{s['end']:8.2f}  {s['label']} ({s.get('score')})")
+        if a.save_edit_list:
+            from . import editlist, profiles
+            profiles.ensure_live(project, settings.last_preset or "")
+            snaps = profiles.snapshots(project, asdict(f))
+            dest = editlist.write(a.save_edit_list, editlist.build(project, info, snaps, project.profile))
+            print(f"Edit list saved: {dest}")
         result = None
-        if not a.scan_only and (project.active_mutes() or project.active_scenes()):
+        if not a.scan_only and (project.active_mutes() or project.active_scenes() or project.paint):
             result = render_project(project, f, settings, a.out, progress)
             print(f"Done: {result['output']} ({result['how']})")
             for n in result["notes"]:
                 print("  " + n)
+            if a.check:
+                from . import leakcheck
+                lk = leakcheck.run(project, f, settings, result=result, picture=True, listen=a.listen,
+                                   progress=progress)
+                print(lk["summary"])
+                for x in lk["findings"]:
+                    print(f"  {x['kind']:8} at {x['start']:8.2f}  {x.get('text', '')} {x.get('detail', '')}")
         if a.summary_json:
             Path(a.summary_json).write_text(json.dumps({
                 "mutes": project.mutes, "scenes": project.scenes, "result": result,

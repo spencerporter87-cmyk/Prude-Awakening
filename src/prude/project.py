@@ -34,11 +34,21 @@ def _plain(o):
     return str(o)
 
 
+def _hand(items):
+    return [x for x in items or [] if x.get("manual") or x.get("origin") == "manual"]
+
+
 def _by_hand(d: dict) -> dict:
     """The parts of a saved project that came from the person, not from a scan."""
     keep = {"source": d.get("source", ""), "paint": d.get("paint") or []}
-    keep["scenes"] = [x for x in d.get("scenes") or [] if x.get("manual") or x.get("origin") == "manual"]
-    keep["mutes"] = [x for x in d.get("mutes") or [] if x.get("manual") or x.get("origin") == "manual"]
+    keep["scenes"] = _hand(d.get("scenes"))
+    keep["mutes"] = _hand(d.get("mutes"))
+    if d.get("profiles"):                                   # the other viewers' hand-made choices too
+        keep["profile"] = d.get("profile", "")
+        keep["profiles"] = {n: {"filters": sn.get("filters"), "paint": sn.get("paint") or [],
+                                "scenes": _hand(sn.get("scenes")), "mutes": _hand(sn.get("mutes")),
+                                "subtitle_edits": [], "burned_edits": []}
+                            for n, sn in d["profiles"].items()}
     return keep
 
 
@@ -52,7 +62,7 @@ def _clear_dir(folder: Path):
     except Exception:                                   # noqa: BLE001 - unreadable: nothing to keep
         keep = {}
     shutil.rmtree(folder, ignore_errors=True)
-    if any(keep.get(k) for k in ("paint", "scenes", "mutes")):
+    if any(keep.get(k) for k in ("paint", "scenes", "mutes", "profiles")):
         Path(folder).mkdir(parents=True, exist_ok=True)
         write_atomic(Path(folder) / "project.json", json.dumps(keep))
 
@@ -72,6 +82,31 @@ def project_key(path: Path) -> str:
     st = path.stat()
     h = hashlib.sha1(f"{path.resolve()}|{st.st_size}|{int(st.st_mtime)}".encode("utf-8"))
     return h.hexdigest()[:16]
+
+
+def content_id(path) -> str:
+    """Who this file is, by what is in it (its size and three small samples): the same movie keeps the same
+    id when it is moved, renamed or touched, and two different movies practically never share one."""
+    p = Path(path)
+    size = p.stat().st_size
+    h = hashlib.sha1(str(size).encode())
+    sample = 1 << 18
+    with open(p, "rb") as f:
+        for off in (0, max(0, size // 2 - sample // 2), max(0, size - sample)):
+            f.seek(off)
+            h.update(f.read(sample))
+    return h.hexdigest()[:20]
+
+
+def _index_path() -> Path:
+    return projects_dir() / "_content.json"
+
+
+def _index() -> dict:
+    try:
+        return json.loads(_index_path().read_text(encoding="utf-8"))
+    except Exception:                                       # noqa: BLE001
+        return {}
 
 
 @dataclass
@@ -94,6 +129,9 @@ class Project:
     paint: list = field(default_factory=list)            # hand-painted blurs (see paint.py)
     spend_ok: bool = False                               # ElevenLabs spending confirmed for this render
     burned_check: object = None                          # None = not checked; True/False
+    leaks: dict = field(default_factory=dict)            # what the check of the finished copy found (leakcheck.py)
+    profile: str = ""                                    # the viewer whose choices are in mutes/scenes/... right now
+    profiles: dict = field(default_factory=dict)         # the OTHER viewers' saved choices (see profiles.py)
     schema: int = SCHEMA
 
     @property
@@ -104,6 +142,15 @@ class Project:
 
     def save(self):
         write_atomic(self.dir / "project.json", json.dumps(asdict(self), default=_plain))
+        try:                                                # remember who this is, so moving the file keeps the work
+            cid = getattr(self, "_cid", None) or content_id(self.source)
+            self._cid = cid
+            idx = _index()
+            if idx.get(cid) != self.dir.name:
+                idx[cid] = self.dir.name
+                write_atomic(_index_path(), json.dumps(idx))
+        except OSError:
+            pass
 
     @classmethod
     def open(cls, source) -> "Project":
@@ -115,6 +162,17 @@ class Project:
                 d["source"] = source
                 return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
             except Exception:
+                pass
+        else:                                               # not under this path/date: maybe the same movie, moved
+            try:
+                old = projects_dir() / _index().get(content_id(source), "") / "project.json"
+                if old.is_file():
+                    d = migrate(json.loads(old.read_text(encoding="utf-8")))
+                    d["source"] = source
+                    proj = cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+                    proj.save()
+                    return proj
+            except Exception:                               # noqa: BLE001 - start fresh
                 pass
         return cls(source=source)
 

@@ -101,7 +101,7 @@ def _filters():
     return run([ffmpeg(), "-hide_banner", "-filters"]).stdout
 
 
-def extract_frames(info, frames_dir: Path, progress=None, cancel=None, fps=FPS):
+def extract_frames(info, frames_dir: Path, progress=None, cancel=None, fps=FPS, start=0.0):
     frames_dir.mkdir(parents=True, exist_ok=True)
     done = frames_dir / ".complete"
     if done.exists():
@@ -113,7 +113,8 @@ def extract_frames(info, frames_dir: Path, progress=None, cancel=None, fps=FPS):
         vf += (",zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
                "tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv")
     vf += ",format=yuvj420p"
-    cmd = [ffmpeg(), "-y", "-hwaccel", "auto", "-i", str(info.path), "-map", "0:v:0",
+    skip = ["-ss", f"{start:.3f}"] if start > 0 else []          # a different set of instants than the first pass
+    cmd = [ffmpeg(), "-y", "-hwaccel", "auto", *skip, "-i", str(info.path), "-map", "0:v:0",
            "-an", "-sn", "-dn", "-vf", vf, "-q:v", "5", seq_pattern(frames_dir, "%06d.jpg")]
     try:
         run_ffmpeg(cmd, info.duration, progress, cancel, "Watching the movie")
@@ -127,11 +128,11 @@ def extract_frames(info, frames_dir: Path, progress=None, cancel=None, fps=FPS):
     return sorted(frames_dir.glob("*.jpg"))
 
 
-def frame_time(path: Path, fps=FPS):
-    return (int(path.stem) - 1) / fps
+def frame_time(path: Path, fps=FPS, start=0.0):
+    return (int(path.stem) - 1) / fps + start
 
 
-def shot_boundaries(frames, fps=FPS, progress=None, cancel=None):
+def shot_boundaries(frames, fps=FPS, progress=None, cancel=None, start=0.0):
     """Times where the picture changes a lot between samples (camera cuts)."""
     import cv2
     out, prev = [], None
@@ -145,7 +146,7 @@ def shot_boundaries(frames, fps=FPS, progress=None, cancel=None):
         h = cv2.calcHist([hsv], [0, 1], None, [32, 32], [0, 180, 0, 256])
         cv2.normalize(h, h)
         if prev is not None and cv2.compareHist(prev, h, cv2.HISTCMP_BHATTACHARYYA) > 0.45:
-            out.append(frame_time(p, fps) - 0.5 / fps)
+            out.append(frame_time(p, fps, start) - 0.5 / fps)
         prev = h
         if progress and k % 50 == 0:
             progress(k / max(1, len(frames)), "Finding camera cuts")
@@ -479,7 +480,7 @@ def _window(times, a, b):
     return [i for i, t in enumerate(times) if a <= t <= b]
 
 
-def watch(info, work_dir: Path, models_dir, filters, progress=None, cancel=None, log=print):
+def watch(info, work_dir: Path, models_dir, filters, progress=None, cancel=None, log=print, phase=0.0):
     """Full visual scan (cached). Returns a list of scene dicts with kind, group, label,
     detail, start, end, score, action and thumbnails."""
     import numpy as np
@@ -510,10 +511,10 @@ def watch(info, work_dir: Path, models_dir, filters, progress=None, cancel=None,
     if want_clip and not models.clip_ready(models_dir):
         models.ensure_clip(models_dir, stage("models", 0, 1), cancel)
 
-    frames = extract_frames(info, work_dir / "frames", stage("frames", 0, 1), cancel)
+    frames = extract_frames(info, work_dir / "frames", stage("frames", 0, 1), cancel, start=phase)
     if not frames:
         return []
-    times = np.array([frame_time(p) for p in frames], dtype=np.float32)
+    times = np.array([frame_time(p, FPS, phase) for p in frames], dtype=np.float32)
     cache_path = work_dir / "scene_cache.npz"
     cache = load_cache(cache_path)
     if len(cache.get("times", [])) != len(times):
@@ -521,7 +522,7 @@ def watch(info, work_dir: Path, models_dir, filters, progress=None, cancel=None,
     cache.pop("nude", None)   # older single-score cache
 
     if "bounds" not in cache:
-        cache["bounds"] = np.array(shot_boundaries(frames, FPS, stage("analyze", 0, 0.1), cancel),
+        cache["bounds"] = np.array(shot_boundaries(frames, FPS, stage("analyze", 0, 0.1), cancel, phase),
                                    dtype=np.float32)
     import os
     import time
