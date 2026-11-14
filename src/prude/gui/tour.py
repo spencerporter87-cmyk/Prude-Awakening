@@ -188,7 +188,7 @@ def run_tour(app, out_dir: Path, video=None):
         def leaks_shot():
             from .leak_dialog import LeakDialog
             w.project.leaks = {
-                "summary": "⚠ 3 things to look at - 1 in the picture, 1 silences that aren't, 1 in the subtitles.",
+                "summary": "⚠ 3 things to look at: a moment in the picture, a silence that isn't, a line in the subtitles.",
                 "ran": ["silenced words", "subtitles", "picture"], "skipped": ["listening again (not asked for)"],
                 "dismissed": [], "approximate": False,
                 "findings": [

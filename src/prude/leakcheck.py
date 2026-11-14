@@ -233,10 +233,15 @@ def summary(findings, skipped, ran):
         what = ", ".join(ran)
         return f"✓ Nothing slipped through (checked: {what})."
     n = len(findings)
-    return f"⚠ {n} thing{'s' if n != 1 else ''} to look at - " + ", ".join(
-        f"{sum(1 for f in findings if f['kind'] == k)} {w}" for k, w in
-        (("picture", "in the picture"), ("mute", "silences that aren't"), ("heard", "words heard again"),
-         ("subtitle", "in the subtitles")) if any(f["kind"] == k for f in findings)) + "."
+    parts = []
+    for k, one, many in (("picture", "a moment in the picture", "moments in the picture"),
+                         ("mute", "a silence that isn't", "silences that aren't"),
+                         ("heard", "a word heard again", "words heard again"),
+                         ("subtitle", "a line in the subtitles", "lines in the subtitles")):
+        c = sum(1 for f in findings if f["kind"] == k)
+        if c:
+            parts.append(one if c == 1 else f"{c} {many}")
+    return f"⚠ {n} thing{'s' if n != 1 else ''} to look at: " + ", ".join(parts) + "."
 
 
 def run(project, filters, settings, result=None, output=None, picture=True, listen=False,
