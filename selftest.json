@@ -1,0 +1,20 @@
+{
+ "version": "3.7.0",
+ "faster_whisper": "1.2.1",
+ "ctranslate2": "4.9.0",
+ "onnxruntime": "1.32.0",
+ "nudenet": "ok",
+ "cv2": "5.0.0",
+ "tokenizers": "0.23.3",
+ "numpy": "2.5.4",
+ "requests": "2.34.2",
+ "PySide6": "6.12.0",
+ "PySide6.QtMultimedia": "ok",
+ "PySide6.QtMultimediaWidgets": "ok",
+ "ffmpeg": "D:\\a\\Prude-Awakening\\Prude-Awakening\\dist\\PrudeAwakening\\_internal\\ffmpeg\\bin\\ffmpeg.exe",
+ "ffprobe": "D:\\a\\Prude-Awakening\\Prude-Awakening\\dist\\PrudeAwakening\\_internal\\ffmpeg\\bin\\ffprobe.exe",
+ "ffplay": "D:\\a\\Prude-Awakening\\Prude-Awakening\\dist\\PrudeAwakening\\_internal\\ffmpeg\\bin\\ffplay.exe",
+ "nudenet_model": "ok",
+ "ocr": "Hello t there",
+ "ok": true
+}

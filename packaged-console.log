@@ -1,0 +1,53 @@
+Prude Awakening 3.7.0 - packaged test.mkv (0 min · 1280×720 · H264)
+Audio track 0: English · mono · AC3
+  [words] 100%  Matching your word list
+  [frames]  50%  Watching the movie · 29.5× speed · less than a minute left
+  [frames] 100%  Watching the movie · 32.3× speed · less than a minute left
+  [analyze]   0%  Finding camera cuts
+  [models]   4%  Downloading the nudity second opinion: 0.00 of 0.02 GB
+  [models]  13%  Downloading the nudity second opinion: 0.00 of 0.02 GB
+  [models]  23%  Downloading the nudity second opinion: 0.01 of 0.02 GB
+  [models]  32%  Downloading the nudity second opinion: 0.01 of 0.02 GB
+  [models]  41%  Downloading the nudity second opinion: 0.01 of 0.02 GB
+  [models]  51%  Downloading the nudity second opinion: 0.01 of 0.02 GB
+  [models]  60%  Downloading the nudity second opinion: 0.01 of 0.02 GB
+  [models]  74%  Downloading the nudity second opinion: 0.02 of 0.02 GB
+  [models]  83%  Downloading the nudity second opinion: 0.02 of 0.02 GB
+  [models]  93%  Downloading the nudity second opinion: 0.02 of 0.02 GB
+  [models] 100%  Downloading the nudity second opinion: 0.02 of 0.02 GB
+  [models]   1%  Downloading the sharper nudity detector: 0.00 of 0.10 GB
+  [models]  10%  Downloading the sharper nudity detector: 0.01 of 0.10 GB
+  [models]  20%  Downloading the sharper nudity detector: 0.02 of 0.10 GB
+  [models]  30%  Downloading the sharper nudity detector: 0.03 of 0.10 GB
+  [models]  40%  Downloading the sharper nudity detector: 0.04 of 0.10 GB
+  [models]  50%  Downloading the sharper nudity detector: 0.05 of 0.10 GB
+  [models]  60%  Downloading the sharper nudity detector: 0.06 of 0.10 GB
+  [models]  70%  Downloading the sharper nudity detector: 0.07 of 0.10 GB
+  [models]  80%  Downloading the sharper nudity detector: 0.08 of 0.10 GB
+  [models]  90%  Downloading the sharper nudity detector: 0.09 of 0.10 GB
+  [models] 100%  Downloading the sharper nudity detector: 0.10 of 0.10 GB
+  [analyze]  10%  Checking for nudity (0 of 30 frames)
+  [analyze]  30%  Checking for nudity (20 of 30 frames)
+Timing: quick nudity check 32 ms per frame.
+  [analyze]  40%  Second opinion on the whole picture (0 of 30 frames)
+Timing: whole-picture second opinion 101 ms per frame.
+  [analyze]  55%  Looking for described scenes (0 of 30 frames)
+  [analyze]  79%  Looking for described scenes (16 of 30 frames)
+  [analyze]  95%  Lining up scene edges with camera cuts
+Found 3 mutes and 1 scenes.
+  mute      4.19-    4.73  [mild] hell
+  mute      8.09-    8.95  [blasphemy] God damn
+  mute     11.39-   12.29  [strong] bullshit.
+  scene     0.00-   30.00  “a colorful television test pattern” (1.0)
+  [render]   0%  Finding the areas to blur (0 of 30 s)
+No body parts found in 1 scene(s) marked for body-part blur; blurring the whole picture there instead.
+Rendering: video re-encoded on the processor (x264); 3 mutes, 0 cuts, 0 blacked out, 1 blurred, 0 scenes muted.
+ffmpeg -y -i "D:\a\Prude-Awakening\Prude-Awakening\out\e2e\packaged test.mkv" -i "D:\a\Prude-Awakening\Prude-Awakening\out\e2e\packaged test (clean).en.srt" -filter_complex [0:a:0]asetnsamples=n=256:p=0,volume=0:enable='between(t,4.190,4.730)+between(t,8.090,8.950)+between(t,11.390,12.290)'[aout];[0:v:0]boxblur=luma_radius='min(w,h)/14':luma_power=3:chroma_radius='min(cw,ch)/14':chroma_power=3:enable='between(t,0.000,30.000)'[vout] -map [vout] -map [aout] -map 1:0 -c copy -c:v libx264 -preset medium -crf 17 -pix_fmt yuv420p -color_range tv -c:a:0 ac3 -b:a:0 384000 -c:s srt -metadata:s:s:0 language=eng -metadata:s:s:0 "title=English (Prude Awakening)" -disposition:s:0 0 -metadata:s:a:0 language=eng -metadata:s:a:0 title=Filtered -disposition:a:0 default -map_metadata 0 -map_chapters 0 "D:\a\Prude-Awakening\Prude-Awakening\out\e2e\packaged test (clean).partial.mkv"
+  [render]  54%  Re-encoding · 31.6× speed · less than a minute left
+  [render]  60%  Re-encoding · 2.5× speed · less than a minute left
+  [render]  71%  Re-encoding · 2.5× speed · less than a minute left
+  [render]  82%  Re-encoding · 2.4× speed · less than a minute left
+  [render]  90%  Re-encoding · 2.4× speed · less than a minute left
+  [render] 100%  Re-encoding
+Done: D:\a\Prude-Awakening\Prude-Awakening\out\e2e\packaged test (clean).mkv (video re-encoded on the processor (x264))
+  Made subtitles from the dialogue: packaged test (clean).en.srt
