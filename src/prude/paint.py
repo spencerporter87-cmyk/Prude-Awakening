@@ -289,7 +289,8 @@ def filter_graph(info, segs, first_input, src, restore=None, tag=""):
     tail = max(1, int(round((info.duration + 2) * fps)) - at)
     pieces.append(f"color=c=black:s={W}x{H}:r={rate}:d={(tail - 0.5) / fps:.5f},format=gray,setsar={sar}[{tag}pgt]")
     parts.append(f"[{tag}pgt]")
-    enable = "+".join(f"between(t,{max(0.0, s['start'] - 0.2):.3f},{s['end'] + 0.2:.3f})" for s in segs)
+    from .render import balanced
+    enable = balanced("+", (f"between(t,{max(0.0, s['start'] - 0.2):.3f},{s['end'] + 0.2:.3f})" for s in segs), "")
     if restore:      # an untouched copy of the picture goes back wherever the mask is white
         look = [f"{src}{norm}null[{tag}ppmain]",
                 f"{restore}{norm}format={alpha_fmt}[{tag}ppblur]"]

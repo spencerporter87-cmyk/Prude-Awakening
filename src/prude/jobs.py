@@ -158,6 +158,23 @@ class Queue:
         return out
 
 
+def _scan_as_viewer(project, name, filters, settings, progress, cancel, log):
+    """Scan under the preset's name without disturbing anyone else's choices. A movie someone already opened
+    may hold another viewer's work; scanning over it would mix the two up."""
+    from . import profiles
+    from .pipeline import scan
+    if project.profile and project.profile != name:
+        live = project.scan_filters or {}
+        if name in project.profiles:                         # this preset has its own saved choices: pick them up
+            profiles.switch(project, name, live)
+            scan(project, filters, settings, progress, cancel, log)
+        else:                                                # a new viewer, sharing the scan already made
+            profiles.create(project, name, filters, settings, live, progress, cancel, log)
+    else:
+        profiles.ensure_live(project, name)
+        scan(project, filters, settings, progress, cancel, log)
+
+
 def process_job(job, settings, progress=None, cancel=None, log=print):
     """Scan one movie and either save it with the preset's choices or stop for review.
     progress(fraction, message) covers the whole job."""
@@ -185,7 +202,7 @@ def process_job(job, settings, progress=None, cancel=None, log=print):
     if not project.transcript:
         project.audio_track = pick_audio_track(info, project.language)
     f = FilterOptions.from_dict(job.filters)
-    scan(project, f, settings, stage_progress, cancel, log)
+    _scan_as_viewer(project, job.preset or "Default", f, settings, stage_progress, cancel, log)
     subs_on = [x for x in project.subtitle_edits + project.burned_edits if x.get("on", True)]
     found = {"mutes": len(project.mutes), "scenes": len(project.scenes), "subtitle_words": len(subs_on)}
     if review_only:

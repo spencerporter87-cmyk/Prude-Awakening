@@ -45,8 +45,21 @@ def clamp_ranges(ranges, duration):
     return out
 
 
+def balanced(op, terms, empty="0"):
+    """terms joined with + or *, grouped as a balanced tree. FFmpeg 8 refuses an expression nested more than
+    about a hundred levels deep, and a long flat "a+b+c+..." nests one level per term - so a film with a
+    hundred silenced words would fail to save. Balanced, the depth is only log2(n)."""
+    terms = list(terms)
+    if not terms:
+        return empty
+    while len(terms) > 1:
+        terms = [f"({terms[i]}{op}{terms[i + 1]})" if i + 1 < len(terms) else terms[i]
+                 for i in range(0, len(terms), 2)]
+    return terms[0]
+
+
 def _between(ranges, var="t"):
-    return "+".join(f"between({var},{a:.3f},{b:.3f})" for a, b in ranges)
+    return balanced("+", (f"between({var},{a:.3f},{b:.3f})" for a, b in ranges), "")
 
 
 def audio_codec_args(st: dict, out_ext, quality="match"):
@@ -134,7 +147,7 @@ FADE = 0.03
 def _fade_gain(ranges, fade=FADE):
     """volume expression: 0 inside each range, ramping over `fade` s at the edges, 1 elsewhere."""
     terms = [f"clip((abs(t-{(a + b) / 2:.3f})-{(b - a) / 2:.3f})/{fade},0,1)" for a, b in ranges]
-    return "*".join(terms) or "1"
+    return balanced("*", terms, "1")
 
 
 def build_audio_chain(info, track, mutes, blackouts, cuts, mute_mode, fade=False, inserts=()):
@@ -183,7 +196,7 @@ def build_audio_chain(info, track, mutes, blackouts, cuts, mute_mode, fade=False
                      f"dropout_transition=0[amix]")
         chain = "[amix]anull"
     if cuts:
-        removed = "+".join(f"gte(T,{b:.3f})*{b - a:.3f}" for a, b in cuts)
+        removed = balanced("+", (f"gte(T,{b:.3f})*{b - a:.3f}" for a, b in cuts))
         chain += (f",aselect='not({_between(cuts)})',asetpts='PTS-({removed})/TB',"
                   f"aresample=async=1:first_pts=0")
     graph.append(chain + "[aout]")
@@ -230,7 +243,7 @@ def build_video_chain(blackouts, cuts, blurs=(), src="[0:v:0]", scale_h=None):
     if blackouts:
         parts.append(f"drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill:enable='{_between(blackouts)}'")
     if cuts:
-        removed = "+".join(f"gte(T,{b:.3f})*{b - a:.3f}" for a, b in cuts)
+        removed = balanced("+", (f"gte(T,{b:.3f})*{b - a:.3f}" for a, b in cuts))
         parts.append(f"select='not({_between(cuts)})'")
         parts.append(f"setpts='PTS-({removed})/TB'")
     if scale_h:
@@ -539,7 +552,7 @@ def _render(info, project, filters, settings, patterns, out, progress, cancel, l
             if j == track:
                 continue
             if cuts:
-                removed = "+".join(f"gte(T,{b:.3f})*{b - a:.3f}" for a, b in cuts)
+                removed = balanced("+", (f"gte(T,{b:.3f})*{b - a:.3f}" for a, b in cuts))
                 graph.append(f"[0:a:{j}]{t.map_filter + ',' if t.map_filter else ''}"
                              f"aselect='not({_between(cuts)})',asetpts='PTS-({removed})/TB',"
                              f"aresample=async=1:first_pts=0[ao{j}]")

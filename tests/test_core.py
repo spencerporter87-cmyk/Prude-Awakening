@@ -2243,3 +2243,30 @@ def test_a_very_busy_movie_uses_a_filter_script_and_stays_correct(tmp_path):
         loud = leakcheck.level_db(samples, out_time(a + 0.5), out_time(a + 0.7))
         assert quiet is not None and quiet < -60, f"mute {i} (out {out_time(a + 0.1):.2f}s) measured {quiet}"
         assert loud is not None and loud > -40, f"sound after mute {i} is gone ({loud})"
+
+
+def test_batch_job_for_a_movie_with_viewers_keeps_every_viewers_choices(media_dir, fake_words, tmp_path):
+    from dataclasses import asdict
+    from prude import jobs, profiles
+    src = media_dir / "movie51.mkv"
+    mom = FilterOptions(words=["strong"])
+    p = _project(src, fake_words)
+    pipeline.scan(p, mom, Settings())
+    profiles.ensure_live(p, "Mom")
+    mom_mutes = len(p.active_mutes())
+    p.save()
+    # the batch runs the "Kids" preset (more words) on a movie that already has a viewer
+    kids = FilterOptions(words=["strong", "mild", "blasphemy"])
+    q = jobs.Queue(tmp_path / "q.json")
+    job = q.add([src], "Kids", asdict(kids), {"folder": str(tmp_path / "out"), "check_copy": False}, mode="review")[0]
+    jobs.process_job(job, Settings())
+    p2 = Project.open(src)
+    assert p2.profile == "Kids" and "Mom" in p2.profiles
+    assert len(p2.active_mutes()) > mom_mutes                       # the Kids list is what's live now ...
+    assert len([m for m in p2.profiles["Mom"]["mutes"] if m.get("on", True)]) == mom_mutes   # ... and Mom's is untouched
+    assert p2.profiles["Mom"]["filters"]["words"] == ["strong"]
+    # running Mom's preset again later switches back to her own choices instead of mixing them up
+    job2 = q.add([src], "Mom", asdict(mom), {}, mode="review")[0]
+    jobs.process_job(job2, Settings())
+    p3 = Project.open(src)
+    assert p3.profile == "Mom" and "Kids" in p3.profiles and len(p3.active_mutes()) == mom_mutes
