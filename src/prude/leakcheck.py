@@ -9,6 +9,7 @@ Four checks, each independent (one failing never hides the others):
 Times: every finding has `out_start/out_end` (in the finished copy) and `start/end` (in the original movie,
 which is what the paint tool and the review list use)."""
 
+import glob
 import shutil
 import subprocess
 import tempfile
@@ -119,11 +120,40 @@ def silenced_words(samples, spans, cuts, names, rate=RATE):
     return out
 
 
+# ------------------------------------------------------------------ what you chose to keep
+def kept_words(project):
+    """Words you left in on purpose (unticked in Review): [(start, end, normalized words)] in the movie's time.
+    The check must not report these - it would be telling you about your own decision."""
+    from .words import normalize
+    return [(float(m["start"]), float(m["end"]),
+             " ".join(normalize(w) for w in str(m.get("words", "")).replace("/", " ").split()))
+            for m in project.mutes if not m.get("on", True)]
+
+
+def _skipper(project, cuts):
+    """skip(cue_start, cue_end) -> a function(normalized match) that is True for a word you kept."""
+    from .subscan import kept_keys
+    kept = kept_keys(getattr(project, "subtitle_edits", []))
+    left = kept_words(project)
+
+    def for_cue(a, b):
+        ma, mb = out_to_movie(a, cuts), out_to_movie(b, cuts)
+
+        def skip(norm):
+            if any(k == norm and abs(t - ma) <= 0.15 for t, k in kept):
+                return True
+            return any(norm and f" {norm} " in f" {txt} " and _overlap(ma - 0.3, mb + 0.3, s, e) > 0
+                       for s, e, txt in left)
+        return skip
+    return for_cue
+
+
 # ------------------------------------------------------------------ 2. subtitles
-def subtitle_leaks(out_path, info, patterns, cuts, work, log=print):
+def subtitle_leaks(out_path, info, patterns, cuts, work, log=print, project=None):
     from .subscan import read_tracks
     from .subtitles import read_srt
     from .words import censor_text
+    skipper = _skipper(project, cuts) if project is not None else None
     found, groups = [], []
     try:
         for t in read_tracks(info, work, None, None, log, ocr=False):
@@ -133,14 +163,14 @@ def subtitle_leaks(out_path, info, patterns, cuts, work, log=print):
     except Exception as e:                                  # noqa: BLE001 - embedded tracks are optional
         log(f"Couldn't read the subtitles inside the file ({e}).")
     out = Path(out_path)
-    for side in sorted(out.parent.glob(f"{out.stem}.*.srt")):
+    for side in sorted(out.parent.glob(f"{glob.escape(out.stem)}.*.srt")):    # [brackets] in a name are not a pattern
         try:
             groups.append((side.name, read_srt(side)))
         except Exception as e:                              # noqa: BLE001
             log(f"Couldn't read {side.name} ({e}).")
     for label, cues in groups:
         for a, b, text in cues:
-            _, n = censor_text(text, patterns, "stars")
+            _, n = censor_text(text, patterns, "stars", skipper(a, b) if skipper else None)
             if n:
                 snippet = " ".join(str(text).split())[:90]
                 found.append(_finding("subtitle", a, b, cuts, snippet, f"In {label}.", score=1.0))
@@ -170,7 +200,8 @@ def picture_leaks(info, project, filters, settings, cuts, work, thumbs, progress
     found = scene_mod.watch(info, work, settings.models_path, strict_filters(filters), progress, cancel, log,
                             phase=PHASE)
     cleared = [paint.span(p) for p in paint.clear_patches(getattr(project, "paint", None))]
-    left_in = [(float(s["start"]), float(s["end"])) for s in project.scenes if not s.get("on", True)]
+    left_in = [(float(s["start"]), float(s["end"])) for s in project.scenes
+               if not s.get("on", True) or (s.get("action") or filters.scene_action) == "mute"]   # visible on purpose
     thumbs.mkdir(parents=True, exist_ok=True)
     out = []
     for s in found:
@@ -205,8 +236,10 @@ def listen_again(info, project, filters, settings, cuts, work, progress=None, ca
     finally:
         wav.unlink(missing_ok=True)
     hits = find_matches(words, patterns_for(filters), 0.05, 0.05, filters.allow_words)
-    return [_finding("heard", h["start"], h["end"], cuts, h.get("words", ""),
-                     "Heard again in the finished copy.", score=0.9) for h in hits]
+    left = kept_words(project)
+    found = [_finding("heard", h["start"], h["end"], cuts, h.get("words", ""),
+                      "Heard again in the finished copy.", score=0.9) for h in hits]
+    return [f for f in found if not any(_overlap(f["start"] - 0.2, f["end"] + 0.2, a, b) > 0 for a, b, _t in left)]
 
 
 # ------------------------------------------------------------------ the whole check
@@ -296,7 +329,7 @@ def run(project, filters, settings, result=None, output=None, picture=True, list
         if progress:
             progress("check", 0.05, "Reading the finished subtitles")
         try:
-            findings += subtitle_leaks(out, info, patterns_for(filters), cuts, work, log)
+            findings += subtitle_leaks(out, info, patterns_for(filters), cuts, work, log, project)
             ran.append("subtitles")
         except Cancelled:
             raise

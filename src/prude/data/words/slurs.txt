@@ -1,6 +1,6 @@
 # Slurs (labels are masked on screen)
 N-word (n****r / n***a): nigger*, nigga*
-negro: negro*
+negro: negro, negros, negroes
 f-slur (f****t / fag): faggot*, fag, fags
 d*ke: dyke*
 tr*nny: tranny, trannies

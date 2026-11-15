@@ -197,25 +197,39 @@ def star_word(original, style="stars"):
     return STARS
 
 
+_TAG_RE = re.compile(r"<[^<>]{1,200}>|\{\\[^{}]{0,200}\}")      # <i>, </font>, <font color="red">, {\an8}
+
+
+def _tokens(text):
+    """(words, tags): the words of one subtitle line as (start, end, normalized), leaving out anything inside a
+    formatting tag, so "Oh my <i>God</i>" still reads as the phrase "oh my god"."""
+    tags = [(m.start(), m.end()) for m in _TAG_RE.finditer(text)]
+
+    def in_tag(i):
+        return any(a <= i < b for a, b in tags)
+    toks = [(m.start(), m.end(), normalize(m.group())) for m in _WORD_RE.finditer(text) if not in_tag(m.start())]
+    return [t for t in toks if t[2]], tags
+
+
 def censor_text(text, patterns, style="stars", skip=None):
-    """Replace filtered words/phrases. skip(norm_text) -> True keeps that match as it is."""
-    toks = [(m.start(), m.end(), normalize(m.group())) for m in _WORD_RE.finditer(text)]
-    toks = [t for t in toks if t[2]]
+    """Replace filtered words/phrases. skip(norm_text) -> True keeps that match as it is.
+    Formatting tags inside a replaced phrase are kept (balanced) after the replacement."""
+    toks, tags = _tokens(text)
     spans = []
     for a, b, _p in _scan([t[2] for t in toks], patterns):
         if skip and skip(" ".join(t[2] for t in toks[a:b])):
             continue
         spans.append((toks[a][0], toks[b - 1][1]))
     for a, b in reversed(spans):
-        text = text[:a] + star_word(text[a:b], style) + text[b:]
+        inner = "".join(text[x:y] for x, y in tags if a <= x and y <= b)
+        text = text[:a] + star_word(_TAG_RE.sub("", text[a:b]), style) + inner + text[b:]
     return text, len(spans)
 
 
 def find_in_text(text, patterns):
     """[(matched_text, normalized, category)] for one subtitle line."""
-    toks = [(m.start(), m.end(), normalize(m.group())) for m in _WORD_RE.finditer(text)]
-    toks = [t for t in toks if t[2]]
+    toks, _tags = _tokens(text)
     out = []
     for a, b, p in _scan([t[2] for t in toks], patterns):
-        out.append((text[toks[a][0]:toks[b - 1][1]], " ".join(t[2] for t in toks[a:b]), p.category))
+        out.append((_TAG_RE.sub("", text[toks[a][0]:toks[b - 1][1]]), " ".join(t[2] for t in toks[a:b]), p.category))
     return out

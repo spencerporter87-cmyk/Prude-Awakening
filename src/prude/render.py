@@ -59,9 +59,11 @@ def audio_codec_args(st: dict, out_ext, quality="match"):
     lossless_src = codec in LOSSLESS or codec.startswith("pcm_") or (codec == "dts" and "ma" in profile)
     if quality == "lossless" or lossless_src:
         return ["-c:a:0", "alac" if mp4 else "flac"]
-    if codec == "ac3" and "ac3" in enc:
+    # AC-3 and E-AC-3 encoders stop at 5.1: a 7.1 Dolby Digital Plus track would silently lose its bass channel
+    # (and the back speakers), so those go to a codec that keeps every channel (lossless FLAC, or AAC in MP4)
+    if codec == "ac3" and "ac3" in enc and ch <= 6:
         return ["-c:a:0", "ac3", "-b:a:0", str(min(max(br, 448000 if ch > 2 else 224000), 640000))]
-    if codec == "eac3" and "eac3" in enc:
+    if codec == "eac3" and "eac3" in enc and ch <= 6:
         return ["-c:a:0", "eac3", "-b:a:0", str(min(max(br, 768000 if ch > 2 else 256000), 1536000))]
     if codec == "opus" and "libopus" in enc and not mp4:
         return ["-c:a:0", "libopus", "-b:a:0", str(max(br, 96000 * max(1, ch // 2)))]

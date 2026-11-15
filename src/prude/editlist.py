@@ -62,6 +62,8 @@ def shift(snap, seconds):
             for t in ("start", "end"):
                 if t in x:
                     x[t] = round(float(x[t]) + seconds, 3)
+            if "cue_key" in x:                              # subtitle edits are matched by their cue's start
+                x["cue_key"] = round(float(x["cue_key"]) + seconds, 1)
             for key in x.get("keys") or []:                # painted blurs: key-frame times
                 if "t" in key:
                     key["t"] = round(float(key["t"]) + seconds, 3)
@@ -90,15 +92,99 @@ def write(dest, doc):
     return dest
 
 
+def _num(v):
+    """A finite number or None (an edit list from somewhere else may hold anything)."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f == f and f not in (float("inf"), float("-inf")) else None
+
+
+def _clean_patch(x):
+    """A painted blur whose shape data is complete: odd entries are dropped, missing numbers get their usual value."""
+    a = x.get("anchor")
+    x["anchor"] = [_num(a[0]), _num(a[1])] if isinstance(a, (list, tuple)) and len(a) == 2 and \
+        _num(a[0]) is not None and _num(a[1]) is not None else [0.5, 0.5]
+    strokes = []
+    for st in x.get("strokes") or []:
+        pts = [[_num(q[0]), _num(q[1])] for q in (st.get("pts") or []) if isinstance(q, (list, tuple)) and len(q) == 2
+               and _num(q[0]) is not None and _num(q[1]) is not None] if isinstance(st, dict) else []
+        r = _num(st.get("r")) if isinstance(st, dict) else None
+        if pts and r is not None:
+            strokes.append({"r": r, "pts": pts})
+    x["strokes"] = strokes
+    keys = []
+    for k in x.get("keys") or []:
+        t = _num(k.get("t")) if isinstance(k, dict) else None
+        if t is not None:
+            keys.append({"t": t, "dx": _num(k.get("dx")) or 0.0, "dy": _num(k.get("dy")) or 0.0,
+                         "sc": max(0.05, _num(k.get("sc", k.get("scale"))) or 1.0)})
+    x["keys"] = keys
+    x["mode"] = "clear" if x.get("mode") == "clear" else "blur"
+    x["on"] = bool(x.get("on", True))
+    return x
+
+
+def _clean_snapshot(snap):
+    """Keep only well-formed items: dicts with real numbers for their times. Picture files that
+    lived on the PC that made the list are dropped (they mean nothing here)."""
+    import uuid
+    out = {"filters": dict(snap.get("filters") or {}) if isinstance(snap.get("filters"), dict) else {}}
+    for k in EDIT_KEYS:
+        items = []
+        for x in snap.get(k) or []:
+            if not isinstance(x, dict):
+                continue
+            x = dict(x)
+            ok = True
+            for t in ("start", "end"):
+                if t in x or (k in ("mutes", "scenes", "paint")):
+                    v = _num(x.get(t))
+                    if v is None:
+                        ok = False
+                        break
+                    x[t] = v
+            if not ok:
+                continue
+            if k == "scenes":
+                for key in LOCAL_ONLY:
+                    x.pop(key, None)
+            if k in ("scenes", "paint"):
+                for pad in ("pad_before", "pad_after"):
+                    if pad in x:
+                        x[pad] = _num(x[pad]) or 0.0
+            if k == "paint":
+                x = _clean_patch(x)
+            x.setdefault("id", uuid.uuid4().hex[:12])
+            items.append(x)
+        out[k] = items
+    if isinstance(snap.get("leaks"), dict):
+        out["leaks"] = {}
+    return out
+
+
 def read(path):
     try:
         doc = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         raise EditListError(f"This file can't be read as an edit list ({e}).")
-    if not isinstance(doc, dict) or doc.get("format") != FORMAT or not doc.get("profiles"):
+    if not isinstance(doc, dict) or doc.get("format") != FORMAT or not isinstance(doc.get("profiles"), dict) \
+            or not doc["profiles"]:
         raise EditListError("This isn't a Prude Awakening edit list.")
-    if int(doc.get("version", 1)) > VERSION:
+    try:
+        newer = int(doc.get("version", 1)) > VERSION
+    except (TypeError, ValueError):
+        raise EditListError("This edit list's version isn't readable.")
+    if newer:
         raise EditListError("This edit list was made by a newer version of Prude Awakening. Update the app and try again.")
+    doc["profiles"] = {str(n): _clean_snapshot(sn) for n, sn in doc["profiles"].items() if isinstance(sn, dict)}
+    if not doc["profiles"]:
+        raise EditListError("This edit list has no readable choices in it.")
+    if not isinstance(doc.get("movie"), dict):
+        doc["movie"] = {}
+    if doc.get("active") not in doc["profiles"]:
+        doc["active"] = next(iter(doc["profiles"]))
     return doc
 
 
@@ -112,7 +198,7 @@ def compare(doc, path, info):
         same = False
     if same:
         return {"match": "exact", "message": "This is the same file the edit list was made for."}
-    dur, fps = float(m.get("duration") or 0), float(m.get("fps") or 0)
+    dur, fps = _num(m.get("duration")) or 0.0, _num(m.get("fps")) or 0.0
     if dur and abs(dur - info.duration) <= 0.6 and (not fps or not info.video or abs(fps - info.fps) < 0.05):
         return {"match": "same_length", "message": "Same length as the movie the list was made for - the times line up."}
     return {"match": "different",

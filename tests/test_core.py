@@ -1957,7 +1957,7 @@ def test_edit_list_round_trip_and_matching(media_dir, fake_words, tmp_path):
     p, f = _scanned(src, fake_words, ["mild", "blasphemy", "strong"])
     p.scenes = [{"id": "s1", "kind": "violence", "label": "Fight", "start": 6.0, "end": 8.0, "on": True,
                  "thumb": "C:/x/t.jpg", "frame": "C:/x/f.jpg", "action": "cut"}]
-    patch = dict(paint.new_patch(9.0, 10.0), keys=[{"t": 9.5, "dx": 0.1, "dy": 0.0, "scale": 1.0}],
+    patch = dict(paint.new_patch(9.0, 10.0), keys=[{"t": 9.5, "dx": 0.1, "dy": 0.0, "sc": 1.0}],
                  strokes=[{"pts": [[0.4, 0.4]], "r": 0.1}])
     p.paint = [patch]
     p.profile = "Family"
@@ -2098,3 +2098,148 @@ def test_command_line_edit_list_and_check(media_dir, fake_words, tmp_path, monke
     text = capsys.readouterr().out
     assert "same file" in text and "Done:" in text and "Nothing slipped through" in text
     assert out.exists()
+
+
+# ------------------------------------------------------------------ bug hunt (3.7.1)
+def test_leak_check_leaves_alone_what_you_chose_to_keep(media_dir, fake_words, tmp_path, monkeypatch):
+    from prude import leakcheck, transcribe as tr
+    src = media_dir / "movie51.mkv"
+    f = FilterOptions(words=["mild", "blasphemy", "strong"])
+    s = Settings()
+    p = _project(src, fake_words)
+    pipeline.find_word_mutes(p, f)
+    hell = next(m for m in p.mutes if "hell" in m["words"])
+    hell["on"] = False                                           # you chose to keep this "hell" in the sound ...
+    p.subtitle_edits = [{"id": "k", "cue_key": 4.8, "norm": "hell", "on": False, "start": 4.8, "end": 5.6}]   # ... and in the subtitles
+    p.scenes = [{"id": "c", "kind": "violence", "label": "V", "start": 1.0, "end": 2.5, "on": True, "action": "cut"}]
+    out = tmp_path / "keep.mkv"
+    res = pipeline.render_project(p, f, s, out)
+    monkeypatch.setattr(tr, "extract_dialogue_wav", lambda *a, **k: None)
+    monkeypatch.setattr(tr, "transcribe", lambda *a, **k: ([{"w": " hell", "s": 3.3, "e": 3.7, "p": 0.9}], "fake", "cpu"))
+    lk = leakcheck.run(p, f, s, result=res, picture=False, listen=True)
+    assert lk["findings"] == [], lk["findings"]
+    assert "listening again" in lk["ran"]
+    # the same sound heard where you DID ask for silence is still reported
+    hell["on"] = True
+    res2 = dict(res)
+    monkeypatch.setattr(tr, "transcribe", lambda *a, **k: ([{"w": " hell", "s": 3.3, "e": 3.7, "p": 0.9}], "fake", "cpu"))
+    lk = leakcheck.run(p, f, s, result=res2, picture=False, listen=True)
+    assert any(x["kind"] == "heard" for x in lk["findings"])
+
+
+def test_leak_check_reads_the_side_subtitles_when_the_name_has_brackets(media_dir, fake_words, tmp_path):
+    from prude import leakcheck
+    src = media_dir / "movie51.mkv"
+    f = FilterOptions(words=["mild"])
+    p = _project(src, fake_words)
+    pipeline.find_word_mutes(p, f)
+    out = tmp_path / "Some Movie [1080p] (clean).mkv"
+    res = pipeline.render_project(p, f, Settings(), out)
+    side = out.with_name(out.stem + ".en.srt")
+    assert side.exists()
+    side.write_text("1\n00:00:01,000 --> 00:00:02,000\nWhat the hell?\n", encoding="utf-8")
+    lk = leakcheck.run(p, f, Settings(), result=res, picture=False)
+    assert any(x["kind"] == "subtitle" and "hell" in x["text"] for x in lk["findings"]), lk
+
+
+def test_picture_check_ignores_scenes_you_chose_to_only_silence(media_dir, fake_words, tmp_path, monkeypatch):
+    from prude import leakcheck, scenes as scene_mod
+    src = media_dir / "movie51.mkv"
+    f = FilterOptions(words=[], scenes=["nude_f_breasts"], sensitivity=3)
+    p = _project(src, fake_words)
+    p.scenes = [{"id": "q", "kind": "nudity", "label": "Nudity", "start": 5.0, "end": 6.0, "on": True, "action": "mute"}]
+    out = tmp_path / "quiet.mkv"
+    res = pipeline.render_project(p, FilterOptions(words=[]), Settings(), out)
+    monkeypatch.setattr(scene_mod, "watch", lambda *a, **k: [
+        {"kind": "nudity", "label": "Nudity", "detail": "", "start": 5.0, "end": 6.0, "score": 0.7},
+        {"kind": "nudity", "label": "Nudity", "detail": "", "start": 12.0, "end": 13.0, "score": 0.7}])
+    lk = leakcheck.run(p, f, Settings(), result=res, picture=True)
+    assert [x["start"] for x in lk["findings"] if x["kind"] == "picture"] == [12.0]
+
+
+def test_edit_lists_from_elsewhere_cant_crash_the_app(media_dir, tmp_path):
+    import json
+    from prude import editlist
+    good = {"start": 1.0, "end": 2.0, "id": "a", "words": "x", "on": True}
+    def load(doc):
+        f = tmp_path / "x.prudeedit"
+        f.write_text(json.dumps(doc), encoding="utf-8")
+        return editlist.read(f)
+    base = {"format": "prude-edit", "version": 1, "movie": {"duration": "long", "fps": None}, "profiles": {}}
+    for bad in ({"version": "two"}, {"profiles": []}, {"profiles": {"A": "text"}}, {"profiles": {}}):
+        with pytest.raises(editlist.EditListError):
+            load(dict(base, **bad))
+    doc = load(dict(base, active="nobody", profiles={"A": {
+        "mutes": [good, "junk", {"start": "soon", "end": 3}, {"start": float("nan"), "end": 2}, {"end": 2}],
+        "scenes": [{"start": 5, "end": 6, "thumb": "C:/their/pc/t.jpg", "frame": "/etc/passwd"}],
+        "paint": [{"start": 1, "end": 2, "keys": [{"t": 1.5}, {"dx": 1}], "strokes": [{"pts": [[0.5, 0.5]], "r": 0.1}, "x", {"r": 1}],
+                   "anchor": "mid", "pad_before": "lots", "mode": "weird"}],
+        "filters": "words", "leaks": {"findings": [1]}}}))
+    snap = doc["profiles"]["A"]
+    assert [m["id"] for m in snap["mutes"]] == ["a"] and doc["active"] == "A"
+    assert "thumb" not in snap["scenes"][0] and "frame" not in snap["scenes"][0] and snap["scenes"][0]["id"]
+    patch = snap["paint"][0]
+    assert patch["keys"] == [{"t": 1.5, "dx": 0.0, "dy": 0.0, "sc": 1.0}] and len(patch["strokes"]) == 1
+    assert patch["anchor"] == [0.5, 0.5] and patch["pad_before"] == 0.0 and patch["mode"] == "blur"
+    assert snap["filters"] == {}
+    info = probe(media_dir / "movie51.mkv")
+    assert editlist.compare(doc, media_dir / "movie51.mkv", info)["match"] in ("exact", "different")   # no crash on odd facts
+    # shifting a list moves the subtitle edits' keys too, or they would never match their cue again
+    snap = editlist.shift({"subtitle_edits": [{"cue_key": 4.8, "start": 4.8, "end": 5.6}]}, 2.0)
+    assert snap["subtitle_edits"][0]["cue_key"] == 6.8
+
+
+def test_formatting_tags_inside_a_phrase_dont_hide_it_from_the_subtitle_cleaner():
+    from prude.words import build_patterns, censor_text, find_in_text
+    pats = build_patterns(["blasphemy", "strong"])
+    assert censor_text("Oh my <i>God</i>!", pats)[0] == "****<i></i>!"
+    assert censor_text("<i>Oh my God!</i>", pats)[0] == "<i>****!</i>"
+    assert censor_text("{\\an8}Holy {\\i1}shit{\\i0}, man", pats)[0] == "{\\an8}Holy {\\i1}****{\\i0}, man"
+    assert censor_text('<font color="red">hell</font> no', build_patterns(["mild"]))[0] == '<font color="red">****</font> no'
+    assert find_in_text("God <b>damn</b> it", build_patterns(["blasphemy"])) == [("God damn", "god damn", "blasphemy")]
+    assert censor_text("Plain text, nothing here.", pats) == ("Plain text, nothing here.", 0)
+
+
+def test_seven_one_dolby_digital_plus_keeps_every_channel():
+    from prude.render import audio_codec_args
+    eac3_51 = {"codec_name": "eac3", "channels": 6, "bit_rate": "768000"}
+    eac3_71 = {"codec_name": "eac3", "channels": 8, "bit_rate": "1024000"}
+    assert audio_codec_args(eac3_51, ".mkv")[:2] == ["-c:a:0", "eac3"]
+    mkv = audio_codec_args(eac3_71, ".mkv")                      # the E-AC-3 encoder would drop the LFE: not used for 7.1
+    assert mkv[:2] == ["-c:a:0", "flac"]
+    assert audio_codec_args(eac3_71, ".mp4")[:2] == ["-c:a:0", "aac"]
+
+
+def test_a_very_busy_movie_uses_a_filter_script_and_stays_correct(tmp_path):
+    """Hundreds of soft-faded silences plus many cuts make a filter graph too long for the command line: it goes
+    through a script file instead (a different option on FFmpeg 7+). Every silence must still land on its word."""
+    from conftest import level
+    src = tmp_path / "busy.mkv"
+    ff("-f", "lavfi", "-i", "testsrc2=s=160x90:r=2:d=600", "-f", "lavfi", "-i", "sine=f=440:r=48000:d=600",
+       "-ac", "2", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "ac3", "-b:a", "192k",
+       "-metadata:s:a:0", "language=eng", str(src))
+    p = _project(src, [])
+    p.mutes = [{"id": f"m{i}", "start": 10.2 + i * 0.8, "end": 10.5 + i * 0.8, "words": "x", "category": "strong",
+                "on": True} for i in range(700)]
+    cuts = [(20.0 + i * 19, 21.0 + i * 19) for i in range(30)]
+    p.scenes = [{"id": f"c{i}", "kind": "violence", "label": "V", "start": a, "end": b, "on": True, "action": "cut"}
+                for i, (a, b) in enumerate(cuts)]
+    lines = []
+    out = tmp_path / "busy-clean.mkv"
+    f = FilterOptions(words=[], scene_action="cut", mute_fade=True)
+    res = pipeline.render_project(p, f, Settings(device="cpu"), out, log=lines.append)
+    assert any("-filter_complex_script" in x or "-/filter_complex" in x for x in lines), "the long graph should use a script file"
+    assert res["valid"] and res["final_duration"] == pytest.approx(600 - 30, abs=1.0)
+
+    def out_time(t):                                   # a movie time -> the finished copy's time
+        return t - sum(min(b, t) - a for a, b in cuts if a < t)
+    from prude import leakcheck
+    samples = leakcheck.decode_audio(out)               # the whole sound once (no seeking)
+    for i in (0, 57, 211, 399, 699):
+        a = 10.2 + i * 0.8
+        if any(c0 - 0.5 < a < c1 + 0.5 for c0, c1 in cuts):
+            continue
+        quiet = leakcheck.level_db(samples, out_time(a + 0.1), out_time(a + 0.2))
+        loud = leakcheck.level_db(samples, out_time(a + 0.5), out_time(a + 0.7))
+        assert quiet is not None and quiet < -60, f"mute {i} (out {out_time(a + 0.1):.2f}s) measured {quiet}"
+        assert loud is not None and loud > -40, f"sound after mute {i} is gone ({loud})"
