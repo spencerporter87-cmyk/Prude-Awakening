@@ -14,7 +14,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from . import __version__
-from .media import Cancelled, probe, pick_audio_track
+from .media import MediaError, Cancelled, probe, pick_audio_track
 from .pipeline import render_project, scan
 from .project import Project
 from .settings import FilterOptions, Settings
@@ -73,11 +73,24 @@ def main(argv=None):
         f.mute_mode = a.mute_mode
 
     src = Path(a.video).resolve()
+    if not src.is_file():
+        print(f"Error: can't find the file {src}")
+        return 2
+    try:
+        info = probe(src)
+    except MediaError as e:
+        print("Error: " + str(e).strip().splitlines()[0] + " " + " ".join(str(e).strip().splitlines()[-1:]))
+        return 2
+    if not info.audio:
+        print("Error: this file has no audio track, so there is nothing to listen to.")
+        return 2
+    if a.audio_track is not None and not 0 <= a.audio_track < len(info.audio):
+        print(f"Error: there is no audio track {a.audio_track}; this file has {len(info.audio)} (numbered from 0).")
+        return 2
     project = Project.open(src)
     if a.rescan:
         project.clear_cache()
         project = Project.open(src)             # keeps painted blurs and scenes you added by hand
-    info = probe(src)
     project.audio_track = a.audio_track if a.audio_track is not None else (
         project.audio_track if project.transcript else pick_audio_track(info, project.language))
     print(f"Prude Awakening {__version__} - {src.name} ({info.summary()})")

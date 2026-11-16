@@ -340,6 +340,37 @@ def probe(path) -> MediaInfo:
                      subtitles=[s for s in streams if s.get("codec_type") == "subtitle"])
 
 
+def constant_frame_rate(info) -> bool:
+    """True when the picture's frames really are evenly spaced. The file's header can claim 24 fps while the
+    frames inside are unevenly timed (screen captures, some web and TV rips); a filter that numbers frames instead
+    of reading their times would then squeeze the picture out of step with the sound. So look at the times of
+    the frames themselves, in a few short windows spread over the movie."""
+    cached = getattr(info, "_cfr", None)
+    if cached is not None:
+        return cached
+    v = info.video or {}
+    claimed = (v.get("r_frame_rate") or "") == (v.get("avg_frame_rate") or "")
+    verdict = claimed
+    try:
+        fps, dur = info.fps, info.duration
+        if claimed and v and fps > 0 and dur > 0:
+            step = 1.0 / fps
+            for t in sorted({0.0, dur * 0.25, dur * 0.5, dur * 0.75, max(0.0, dur - 20.0)}):
+                r = run([ffprobe(), "-v", "error", "-select_streams", str(v["index"]), "-read_intervals",
+                         f"{t:.2f}%+6", "-show_entries", "packet=pts_time", "-of", "csv=p=0", str(info.path)])
+                pts = sorted(float(x.strip(",")) for x in r.stdout.split() if x.strip(",") not in ("", "N/A"))
+                if len(pts) >= 8 and any(not 0.6 * step <= b - a <= 1.4 * step for a, b in zip(pts, pts[1:])):
+                    verdict = False
+                    break
+    except Exception:                                        # noqa: BLE001 - only a safety check; trust the header
+        verdict = claimed
+    try:
+        info._cfr = verdict
+    except AttributeError:
+        pass
+    return verdict
+
+
 def audio_map_filter(path, track) -> str:
     """map_filter of one track of a file on disk ("" when it needs none)."""
     try:

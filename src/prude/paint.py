@@ -271,6 +271,9 @@ def filter_graph(info, segs, first_input, src, restore=None, tag=""):
     # disagree by a frame about which frame is which. Snapping both to the exact frame grid makes the blur land on
     # the frame you picked. (Not for variable-frame-rate files, where there is no grid.)
     cfr = (info.video.get("r_frame_rate") or rate) == (info.video.get("avg_frame_rate") or rate)
+    if cfr:
+        from .media import constant_frame_rate
+        cfr = constant_frame_rate(info)           # the header can claim a steady rate the frames don't keep
     # one clock for both: a timebase of exactly one frame, so frame number N is pts N for the picture and the
     # mask alike (no container rounding, no float truncation)
     num, _, den = str(rate).partition("/")

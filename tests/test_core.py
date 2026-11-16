@@ -2270,3 +2270,41 @@ def test_batch_job_for_a_movie_with_viewers_keeps_every_viewers_choices(media_di
     jobs.process_job(job2, Settings())
     p3 = Project.open(src)
     assert p3.profile == "Mom" and "Kids" in p3.profiles and len(p3.active_mutes()) == mom_mutes
+
+
+def test_command_line_explains_bad_input_instead_of_crashing(media_dir, tmp_path, capsys):
+    from prude import cli
+    (tmp_path / "fake.mkv").write_text("not a video")
+    ff("-f", "lavfi", "-i", "testsrc2=s=160x90:r=24:d=2", "-c:v", "libx264", "-preset", "ultrafast", str(tmp_path / "silent.mkv"))
+    for target, words in ((tmp_path / "nothere.mkv", "find the file"), (tmp_path, "find the file"),
+                          (tmp_path / "fake.mkv", "couldn't be read"), (tmp_path / "silent.mkv", "no audio track"),
+                          (media_dir / "movie51.mkv", "no audio track 9")):
+        argv = [str(target), "--scan-only"] + (["--audio-track", "9"] if "9" in words else [])
+        assert cli.main(argv) == 2
+        assert words in capsys.readouterr().out
+
+
+def test_painted_blur_on_a_file_with_unevenly_timed_frames_keeps_picture_and_sound_together(tmp_path):
+    """A header can claim a steady 24 fps while frames inside are dropped here and there. Numbering frames
+    (instead of reading their times) would squeeze the picture ~25% shorter than the sound."""
+    from prude import paint
+    from prude.media import constant_frame_rate
+    src = tmp_path / "uneven.mkv"
+    ff("-f", "lavfi", "-i", "testsrc2=s=320x180:r=24:d=30", "-f", "lavfi", "-i", "sine=f=440:d=30",
+       "-vf", "select='gt(random(1),0.25)'", "-fps_mode", "vfr", "-c:v", "libx264", "-preset", "ultrafast",
+       "-c:a", "aac", "-metadata:s:a:0", "language=eng", str(src))
+    info = probe(src)
+    assert info.video["r_frame_rate"] == info.video["avg_frame_rate"]        # the header says "steady" ...
+    assert constant_frame_rate(info) is False                               # ... the frames say otherwise
+    p = _project(src, [])
+    p.scenes = [{"id": "c", "kind": "violence", "label": "V", "start": 8.0, "end": 9.5, "on": True, "action": "cut"}]
+    p.paint = [dict(paint.new_patch(12.0, 14.0), strokes=[{"pts": [[0.5, 0.5]], "r": 0.2}],
+                    keys=[{"t": 12.5, "dx": 0, "dy": 0, "sc": 1.0}])]
+    out = tmp_path / "uneven-clean.mkv"
+    res = pipeline.render_project(p, FilterOptions(words=[], scene_action="cut"), Settings(device="cpu"), out)
+    o = probe(out)
+    vdur = max(float(x.strip(",")) for x in subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+         "packet=pts_time", "-of", "csv=p=0", str(out)], capture_output=True, text=True).stdout.split()
+        if x.strip(",") not in ("", "N/A"))
+    assert res["valid"] and vdur == pytest.approx(res["final_duration"], abs=0.5), (vdur, res["final_duration"])
