@@ -261,6 +261,7 @@ class SetupPage(QWidget):
         for key, name, desc in CATEGORIES:
             wc = WordCategory(key, name, desc, masked=(key == "slurs"))
             wc.changed.connect(self._changed)
+            wc.panelToggled.connect(self._schedule_cols_sync)
             self.cats[key] = wc
             lang.lay.addWidget(wc)
         self.more_lang = Disclosure("language", "More language options")
@@ -482,13 +483,23 @@ class SetupPage(QWidget):
             QTimer.singleShot(0, self._sync_cols_orientation)
         return super().eventFilter(obj, event)
 
+    def _cols_min_width(self):
+        if not hasattr(self, "lang_card"):
+            return 0
+        m = self.cols_h_lay.contentsMargins()
+        return (self.lang_card.minimumSizeHint().width() + self.scene_col.minimumSizeHint().width()
+                + self.cols_h_lay.spacing() + m.left() + m.right())
+
+    def _schedule_cols_sync(self):
+        QTimer.singleShot(0, self._sync_cols_orientation)
+
     def _sync_cols_orientation(self):
         if not hasattr(self, "lang_card"):
             return
         width = self.scroll.viewport().width()
         if width <= 0:
             return
-        vertical = width < 1100
+        vertical = width < 1100 or self._cols_min_width() > width
         if vertical == self._cols_vertical:
             return
         self._cols_vertical = vertical
@@ -808,12 +819,14 @@ class SetupPage(QWidget):
 
     def _disclosure_toggled(self, key, on):
         self._persist_disclosure(key, on)
+        self._schedule_cols_sync()
         if on:
             w = self._disclosure_widgets.get(key)
             self._ensure_visible(w.content if w is not None else None)
 
     def _on_scene_details(self, group, on):
         self._persist_disclosure(f"details:{group}", on)
+        self._schedule_cols_sync()
         if on:
             self._ensure_visible(self.groups[group].details)
 

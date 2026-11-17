@@ -153,3 +153,21 @@ def test_small_window_stacks_cards_without_horizontal_scroll(qapp):
         assert page.scroll.verticalScrollBar().isVisible()
     finally:
         close(page, qapp)
+
+
+def test_expanded_word_panel_stacks_cards_without_horizontal_scroll(qapp):
+    page, _ = make_setup(qapp)
+    try:
+        page.cats["slurs"].toggle()
+        qapp.processEvents()
+        qapp.processEvents()
+        assert page._cols_vertical
+        assert page.scroll.horizontalScrollBar().maximum() == 0
+
+        page.cats["slurs"].toggle()
+        qapp.processEvents()
+        qapp.processEvents()
+        assert not page._cols_vertical
+        assert page.scroll.horizontalScrollBar().maximum() == 0
+    finally:
+        close(page, qapp)

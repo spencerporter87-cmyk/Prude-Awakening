@@ -25,6 +25,7 @@ class CategoryBox(QCheckBox):
 
 class WordCategory(QWidget):
     changed = Signal()
+    panelToggled = Signal()
     COLS = 4
 
     def __init__(self, key, name, desc, masked=False, parent=None):
@@ -108,6 +109,7 @@ class WordCategory(QWidget):
         show = not self.panel.isVisible()
         self.panel.setVisible(show)
         self.chev.setText("▾ Words" if show else "▸ Words")
+        self.panelToggled.emit()
 
     # ------------------------------------------------------------ events
     def _box_clicked(self):
