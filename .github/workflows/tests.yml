@@ -42,6 +42,6 @@ jobs:
           sudo install -m 755 ffmpeg-x/bin/ffmpeg ffmpeg-x/bin/ffprobe /usr/local/bin/
           ffmpeg -version | head -1
       - name: Python packages
-        run: pip install numpy onnxruntime opencv-python-headless pillow pyyaml requests pytest
+        run: pip install numpy onnxruntime opencv-python-headless pillow pyyaml requests pytest PySide6-Essentials PySide6-Addons
       - name: Unit tests
         run: python -m pytest tests -q
