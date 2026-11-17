@@ -74,18 +74,25 @@ class MainWindow(QMainWindow):
         self._gpu_present = None
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(app_icon())
-        screen = self.screen() or QApplication.primaryScreen()
-        avail = screen.availableGeometry() if screen is not None else None
-        aw, ah = (avail.width(), avail.height()) if avail is not None else (1600, 900)
         if settings.window and len(settings.window) == 4:
             x, y, w, h = settings.window
-            w = max(900, min(int(w), aw))
-            h = max(640, min(int(h), ah))
-            if avail is not None:
-                x = min(max(int(x), avail.left()), avail.right() - w)
-                y = min(max(int(y), avail.top()), avail.bottom() - h)
+            w = max(900, int(w))
+            h = max(640, int(h))
+            # Apply the saved spot first so screen() resolves the monitor it was on,
+            # then clamp into that screen's usable area.
             self.setGeometry(x, y, w, h)
+            screen = self.screen() or QApplication.primaryScreen()
+            avail = screen.availableGeometry() if screen is not None else None
+            if avail is not None:
+                w = min(w, avail.width())
+                h = min(h, avail.height())
+                x = min(max(x, avail.left()), avail.right() - w)
+                y = min(max(y, avail.top()), avail.bottom() - h)
+                self.setGeometry(x, y, w, h)
         else:
+            screen = self.screen() or QApplication.primaryScreen()
+            avail = screen.availableGeometry() if screen is not None else None
+            aw, ah = (avail.width(), avail.height()) if avail is not None else (1600, 900)
             self.resize(min(1240, aw), min(820, ah))
         self.stack = PageStack()
         self.setCentralWidget(self.stack)
