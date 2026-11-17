@@ -41,7 +41,7 @@ class WordCategory(QWidget):
         self.box.setTristate(True)
         self.box.clicked.connect(self._box_clicked)
         head.addWidget(self.box)
-        d = label(desc, "Small")
+        d = label(desc, "Muted")
         d.setToolTip(desc)
         head.addWidget(d, 1)
         self.count = label("", "Small")

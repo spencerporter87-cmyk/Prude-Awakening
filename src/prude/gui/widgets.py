@@ -2,10 +2,10 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QIcon, QPixmap
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit, QProgressBar, QPushButton,
-                               QVBoxLayout, QWidget)
+from PySide6.QtCore import QRect, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFontMetrics, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLayout, QLineEdit, QProgressBar, QPushButton,
+                               QRadioButton, QSizePolicy, QVBoxLayout, QWidget)
 
 from ..paths import DATA_DIR
 
@@ -213,3 +213,317 @@ class TimeEdit(QLineEdit):
             return
         self.set_seconds(v)
         self.changed.emit(v)
+
+
+class ElideMiddleLabel(QLabel):
+    """Label that elides the middle of long text; tooltip/accessibility keep the full text."""
+
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+        self._full = ""
+        self.set_full_text(text)
+
+    def set_full_text(self, text):
+        self._full = text or ""
+        self.setToolTip(self._full)
+        self.setAccessibleName(self._full)
+        self._update_text()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_text()
+
+    def _update_text(self):
+        if not self._full:
+            self.setText("")
+            return
+        w = self.width()
+        if w <= 0:
+            self.setText(self._full)
+            return
+        self.setText(QFontMetrics(self.font()).elidedText(self._full, Qt.ElideMiddle, w))
+
+
+class StepIndicator(QWidget):
+    """The four journey steps, with the current one marked by weight and text."""
+
+    STEPS = ("Choose", "Scan", "Review", "Save")
+
+    def __init__(self, current=1, parent=None):
+        super().__init__(parent)
+        self.setObjectName("StepIndicator")
+        self.current = 1
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
+        lay.addStretch(1)
+        self.labels = []
+        for i, name in enumerate(self.STEPS, 1):
+            lab = QLabel()
+            lab.setObjectName("StepTodo")
+            self.labels.append(lab)
+            lay.addWidget(lab)
+            if i < len(self.STEPS):
+                sep = label("·", "Muted")
+                sep.setObjectName("StepSep")
+                lay.addWidget(sep)
+        lay.addStretch(1)
+        self.set_current(current)
+
+    def set_current(self, current):
+        self.current = max(1, min(len(self.STEPS), int(current)))
+        for i, lab in enumerate(self.labels, 1):
+            name = self.STEPS[i - 1]
+            if i < self.current:
+                lab.setObjectName("StepDone")
+                lab.setText(f"✓ {name}")
+                lab.setAccessibleName(f"Step {i}: {name}, done")
+            elif i == self.current:
+                lab.setObjectName("StepCurrent")
+                lab.setText(f"{i} {name}")
+                lab.setAccessibleName(f"Step {i}: {name}, current step")
+                lab.setAccessibleDescription("Current step")
+            else:
+                lab.setObjectName("StepTodo")
+                lab.setText(f"{i} {name}")
+                lab.setAccessibleName(f"Step {i}: {name}, not started")
+            lab.style().unpolish(lab)
+            lab.style().polish(lab)
+
+
+class Disclosure(QWidget):
+    """A labelled disclosure with a persisted open/closed state."""
+
+    toggled = Signal(str, bool)
+
+    def __init__(self, key, title, parent=None):
+        super().__init__(parent)
+        self.key = key
+        self.title = title
+        self.expanded = False
+        self.badge = ""
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        self.button = QPushButton()
+        self.button.setObjectName("Disclosure")
+        self.button.setCheckable(True)
+        self.button.setCursor(Qt.PointingHandCursor)
+        self.button.toggled.connect(self._button_toggled)
+        lay.addWidget(self.button)
+        self.content = QWidget()
+        self.content_lay = QVBoxLayout(self.content)
+        self.content_lay.setContentsMargins(0, 2, 0, 0)
+        self.content_lay.setSpacing(8)
+        self.content.setVisible(False)
+        lay.addWidget(self.content)
+        self._render_button()
+
+    def set_badge(self, text):
+        self.badge = text or ""
+        self._render_button()
+
+    def is_expanded(self):
+        return self.expanded
+
+    def set_expanded(self, on, persist=True):
+        on = bool(on)
+        if on == self.expanded:
+            return
+        self.button.blockSignals(True)
+        self.button.setChecked(on)
+        self.button.blockSignals(False)
+        self._apply(on, persist)
+
+    def _button_toggled(self, on):
+        if on != self.expanded:
+            self._apply(on, True)
+
+    def _apply(self, on, persist):
+        self.expanded = on
+        self.content.setVisible(on)
+        self._render_button()
+        if persist:
+            self.toggled.emit(self.key, on)
+
+    def _render_button(self):
+        arrow = "▾" if self.expanded else "▸"
+        suffix = f" · {self.badge}" if self.badge else ""
+        self.button.setText(f"{arrow}  {self.title}{suffix}")
+        state = "expanded" if self.expanded else "collapsed"
+        self.button.setAccessibleName(f"{self.title}, {state}")
+        self.button.setAccessibleDescription(f"{self.title}, {state}")
+
+
+class FlowLayout(QLayout):
+    """A wrapping layout for preset cards."""
+
+    def __init__(self, parent=None, margin=0, hspace=10, vspace=10):
+        super().__init__(parent)
+        self.setContentsMargins(margin, margin, margin, margin)
+        self._hspace = hspace
+        self._vspace = vspace
+        self._items = []
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):
+        if 0 <= index < len(self._items):
+            return self._items.pop(index)
+        return None
+
+    def expandingDirections(self):
+        return Qt.Orientations(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._do_layout(QRect(0, 0, width, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do_layout(rect, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self._items:
+            w = item.widget()
+            if w is not None and not w.isVisible():
+                continue
+            size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        return size + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _do_layout(self, rect, test_only):
+        m = self.contentsMargins()
+        area = QRect(rect.x() + m.left(), rect.y() + m.top(),
+                     max(0, rect.width() - m.left() - m.right()),
+                     max(0, rect.height() - m.top() - m.bottom()))
+        x, y, line_h = area.left(), area.top(), 0
+        for item in self._items:
+            w = item.widget()
+            if w is not None and not w.isVisible():
+                continue
+            hint = item.sizeHint()
+            next_x = x + hint.width() + self._hspace
+            if line_h and next_x - self._hspace > area.right():
+                x, y = area.left(), y + line_h + self._vspace
+                next_x = x + hint.width() + self._hspace
+                line_h = 0
+            if not test_only:
+                item.setGeometry(QRect(x, y, hint.width(), hint.height()))
+            x = next_x
+            line_h = max(line_h, hint.height())
+        return y + line_h - rect.y() + m.bottom()
+
+
+class FlowWidget(QWidget):
+    """Widget wrapper that lets a FlowLayout report its wrapped height."""
+
+    def __init__(self, parent=None, margin=0, hspace=10, vspace=10):
+        super().__init__(parent)
+        self.flow = FlowLayout(self, margin=margin, hspace=hspace, vspace=vspace)
+        policy = QSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+
+    def heightForWidth(self, width):
+        return self.flow.heightForWidth(width)
+
+    def sizeHint(self):
+        return self.flow.sizeHint()
+
+
+class PresetCard(QRadioButton):
+    """One preset choice: name plus a one-line description, drawn as a card."""
+
+    def __init__(self, name, description="", parent=None):
+        super().__init__(parent)
+        self.name = name
+        self.description = description or ""
+        self.setObjectName("PresetCard")
+        self.setCheckable(True)
+        self.setAutoExclusive(False)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setMinimumSize(176, 64)
+        self.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        self._sync_accessible()
+
+    def setTextDescription(self, description):
+        self.description = description or ""
+        self.setToolTip(self.description)
+        self._sync_accessible()
+        self.update()
+
+    def setChecked(self, on):
+        super().setChecked(bool(on))
+        self._sync_accessible()
+
+    def _sync_accessible(self):
+        state = "selected" if self.isChecked() else "not selected"
+        desc = f"{self.description}. " if self.description else ""
+        self.setAccessibleName(f"{self.name} preset, {desc}{state}")
+        self.setAccessibleDescription(f"{desc}{state}")
+        self.setToolTip(self.description)
+
+    def sizeHint(self):
+        return QSize(192, 70)
+
+    def minimumSizeHint(self):
+        return QSize(150, 62)
+
+    def _elided(self, text, font, width, mode=Qt.ElideRight):
+        return QFontMetrics(font).elidedText(text, mode, max(10, width))
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        pad = 3
+        card = self.rect().adjusted(pad, pad, -pad, -pad)
+        checked = self.isChecked()
+        border = QColor("#1E5A66" if checked else "#E8DDCF")
+        p.setPen(QPen(border, 2 if checked else 1))
+        p.setBrush(QColor("#FFFFFF"))
+        p.drawRoundedRect(card, 10, 10)
+        if self.hasFocus():
+            p.setPen(QPen(QColor("#1E5A66"), 2))
+            p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 11, 11)
+        name_font = self.font()
+        name_font.setBold(checked)
+        desc_font = self.font()
+        desc_font.setPointSizeF(10.0)
+        x = card.left() + (30 if checked else 12)
+        right = card.right() - 12
+        avail = right - x
+        name = self._elided(self.name, name_font, avail, Qt.ElideMiddle)
+        name_rect = QRect(x, card.top() + (8 if self.description else card.height() // 2 - 8), avail, 18)
+        p.setFont(name_font)
+        p.setPen(QColor("#2A1B2E"))
+        p.drawText(name_rect, Qt.AlignLeft | Qt.AlignVCenter, name)
+        if checked:
+            check_font = self.font()
+            check_font.setBold(True)
+            check_font.setPointSizeF(13)
+            p.setFont(check_font)
+            p.setPen(QColor("#2E7D8C"))
+            p.drawText(QRect(card.left() + 8, card.top() + 8, 18, card.height() - 16),
+                       Qt.AlignCenter, "✓")
+        if self.description:
+            desc = self._elided(self.description, desc_font, avail)
+            p.setFont(desc_font)
+            p.setPen(QColor("#6B566E"))
+            p.drawText(QRect(x, card.top() + 34, avail, 18), Qt.AlignLeft | Qt.AlignVCenter, desc)
+        p.end()

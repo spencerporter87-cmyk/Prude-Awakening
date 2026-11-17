@@ -5,11 +5,11 @@ import subprocess
 from dataclasses import asdict
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QKeySequence, QPixmap
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                                QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
-                               QInputDialog, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
+                               QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QProgressBar,
                                QDoubleSpinBox, QRadioButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QTableWidget,
                                QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 
@@ -26,7 +26,8 @@ from ..subtitles import TimeMap
 from .player import HAVE_MM, Player
 from .scenepicker import SceneGroup, action_combo
 from .wordpicker import WordCategory
-from .widgets import (Card, DropZone, StageRow, TimeEdit, beta_badge, button, fmt_time, icon_pixmap, label)
+from .widgets import (Card, Disclosure, DropZone, ElideMiddleLabel, FlowWidget, PresetCard, StageRow,
+                      StepIndicator, TimeEdit, beta_badge, button, fmt_time, icon_pixmap, label)
 
 
 def page():
@@ -141,31 +142,58 @@ class SetupPage(QWidget):
     savePreset = Signal(str, dict)
     trackChanged = Signal(int)
 
+    CARD_DESCRIPTION = {
+        "Family night": "Hard swearing, slurs and God's name in vain. Removes nudity and sex scenes.",
+        "Kids": "Also mild words, kissing, suggestive, violent, gory and scary scenes. Pickier.",
+        "Language only": "Silences words. The picture is not changed.",
+        "Everything": "Every word list and scene type, flagged at the most sensitive level.",
+    }
+    PRESET_ORDER = ["Family night", "Kids", "Language only", "Everything"]
+    WORD_SUMMARY = {"strong": "strong language", "blasphemy": "God's name in vain",
+                    "sexual": "sexual words", "slurs": "slurs", "mild": "mild language"}
+    GROUP_SUMMARY = {"nudity": "nudity", "sexual": "sex scenes",
+                     "violence": "violent and scary scenes", "custom": "your descriptions"}
+
     def __init__(self):
         super().__init__()
         self.setObjectName("Page")
         self._loading = False
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(36, 22, 36, 20)
-        outer.setSpacing(12)
+        self._settings = None
+        self._project = None
+        self._presets = {}
+        self._preset_cards = {}
+        self._custom_card = None
+        self._more_presets_btn = None
+        self._overflow_presets = []
+        self._selected_preset = ""
+        self._last_preset = "Family night"
+        self._dialogue_inline = False
 
-        head = QHBoxLayout()
-        head.addWidget(button("←  Choose another movie", "Link", self.back.emit))
-        head.addStretch()
-        outer.addLayout(head)
-        self.title = label("", "H1")
-        outer.addWidget(self.title)
-        info = QHBoxLayout()
-        self.summary = label("", "Muted")
-        info.addWidget(self.summary)
-        info.addSpacing(16)
-        info.addWidget(label("Audio:", "Muted"))
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(28, 16, 28, 12)
+        outer.setSpacing(8)
+        self.steps = StepIndicator(1)
+        outer.addWidget(self.steps)
+
+        head = QVBoxLayout()
+        head.setSpacing(4)
+        back = QHBoxLayout()
+        back.addWidget(button("←  Choose another movie", "Link", self.back.emit))
+        back.addStretch()
+        head.addLayout(back)
+        self.title = ElideMiddleLabel("")
+        self.title.setObjectName("H1")
+        head.addWidget(self.title)
+        self.info_row = QHBoxLayout()
+        self.info_row.setSpacing(12)
+        self.info = label("", "Muted")
+        self.info_row.addWidget(self.info)
+        self.info_row.addStretch()
+        self.audio_info = label("", "Muted")
+        self.audio_label = label("Audio:", "Muted")
         self.track = QComboBox()
-        self.track.setMinimumWidth(320)
-        self.track.currentIndexChanged.connect(lambda i: (not self._loading) and self.trackChanged.emit(i))
-        info.addWidget(self.track)
-        info.addSpacing(16)
-        info.addWidget(label("Dialogue:", "Muted"))
+        self.track.setMinimumWidth(220)
+        self.track.currentIndexChanged.connect(self._on_track_changed)
         self.dialogue = QComboBox()
         for text, key in (("Detect automatically", "auto"), ("English", "en"),
                           ("Another language (clean the subtitles only)", "foreign")):
@@ -173,31 +201,81 @@ class SetupPage(QWidget):
         self.dialogue.setToolTip("Movies like Apocalypto have no English speech, only English subtitles.\n"
                                  "Then nothing is silenced; swear words in the subtitles are starred out\n"
                                  "and the subtitles are set to show automatically.")
-        info.addWidget(self.dialogue)
-        info.addStretch()
-        outer.addLayout(info)
+        self.dialogue.currentIndexChanged.connect(self._on_dialogue_changed)
+        self.dialogue_box = QWidget()
+        db = QHBoxLayout(self.dialogue_box)
+        db.setContentsMargins(0, 0, 0, 0)
+        db.setSpacing(6)
+        db.addWidget(label("Dialogue:", "Muted"))
+        db.addWidget(self.dialogue)
+        self.info_row.addWidget(self.audio_info)
+        self.info_row.addWidget(self.audio_label)
+        self.info_row.addWidget(self.track)
+        self.info_row.addWidget(self.dialogue_box)
+        head.addLayout(self.info_row)
+        outer.addLayout(head)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         body = QWidget()
-        grid = QGridLayout(body)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(16)
-        scroll.setWidget(body)
-        outer.addWidget(scroll, 1)
+        body_lay = QVBoxLayout(body)
+        body_lay.setContentsMargins(0, 0, 0, 0)
+        body_lay.setSpacing(12)
+        self.scroll.setWidget(body)
+        outer.addWidget(self.scroll, 1)
+        self.scroll.viewport().installEventFilter(self)
+        self._cols_vertical = False
+        self.cols_h = QWidget()
+        self.cols_h_lay = QHBoxLayout(self.cols_h)
+        self.cols_h_lay.setContentsMargins(0, 0, 0, 0)
+        self.cols_h_lay.setSpacing(16)
+        self.cols_v = QWidget()
+        self.cols_v_lay = QVBoxLayout(self.cols_v)
+        self.cols_v_lay.setContentsMargins(0, 0, 0, 0)
+        self.cols_v_lay.setSpacing(14)
+        self.cols_v.setVisible(False)
 
-        # ---- language card
-        lang = Card()
-        lh = QHBoxLayout()
-        lh.addWidget(label("Language", "H2"))
-        lh.addStretch()
-        lh.addWidget(button("Select all", "Link", lambda: self._all_words(True)))
-        lh.addWidget(label("·", "Muted"))
-        lh.addWidget(button("Select none", "Link", lambda: self._all_words(False)))
-        lang.lay.addLayout(lh)
-        lang.lay.addWidget(label("Words to silence. Click ▸ Words to pick individual words.",
-                                 "Muted", wrap=True))
+        who = QVBoxLayout()
+        who.setSpacing(6)
+        who.addWidget(label("Who's watching", "H2"))
+        self.preset_wrap = FlowWidget(margin=0, hspace=10, vspace=10)
+        self.preset_flow = self.preset_wrap.flow
+        who.addWidget(self.preset_wrap)
+        self.summary = label("", "Muted", wrap=True)
+        self.summary.setWordWrap(True)
+        self.summary.setAccessibleName("Summary of what will be filtered")
+        who.addWidget(self.summary)
+        body_lay.addLayout(who)
+
+        lang = Card("Language")
+        self.lang_card = lang
+        lang.lay.setContentsMargins(12, 12, 12, 12)
+        lang_top = QHBoxLayout()
+        lang_top.addStretch()
+        lang_top.addWidget(button("Select all", "Link", lambda: self._all_words(True)))
+        lang_top.addWidget(label("·", "Muted"))
+        lang_top.addWidget(button("Select none", "Link", lambda: self._all_words(False)))
+        lang.lay.addLayout(lang_top)
+        self.cats = {}
+        for key, name, desc in CATEGORIES:
+            wc = WordCategory(key, name, desc, masked=(key == "slurs"))
+            wc.changed.connect(self._changed)
+            self.cats[key] = wc
+            lang.lay.addWidget(wc)
+        self.more_lang = Disclosure("language", "More language options")
+        ml = self.more_lang.content_lay
+        ml.addWidget(label("Your own words to silence (one per line)", None))
+        self.custom = QPlainTextEdit()
+        self.custom.setPlaceholderText("e.g.\nidiot\nshut up\nstupid")
+        self.custom.setFixedHeight(76)
+        self.custom.textChanged.connect(self._changed)
+        ml.addWidget(self.custom)
+        ml.addWidget(label("Never silence these words (comma separated)", None))
+        self.allow = QLineEdit()
+        self.allow.setPlaceholderText("e.g. jesus, god")
+        self.allow.textChanged.connect(self._changed)
+        ml.addWidget(self.allow)
         srow = QHBoxLayout()
         srow.addWidget(label("In subtitles, show them as", None))
         self.star = QComboBox()
@@ -207,7 +285,7 @@ class SetupPage(QWidget):
         self.star.currentIndexChanged.connect(self._changed)
         srow.addWidget(self.star)
         srow.addStretch()
-        lang.lay.addLayout(srow)
+        ml.addLayout(srow)
         brow = QHBoxLayout()
         brow.addWidget(label("Subtitles burned into the picture", None))
         self.burned = QComboBox()
@@ -221,68 +299,52 @@ class SetupPage(QWidget):
         self.burned.currentIndexChanged.connect(self._changed)
         brow.addWidget(self.burned)
         brow.addStretch()
-        lang.lay.addLayout(brow)
-        self.cats = {}
-        for key, name, desc in CATEGORIES:
-            wc = WordCategory(key, name, desc, masked=(key == "slurs"))
-            wc.changed.connect(self._changed)
-            self.cats[key] = wc
-            lang.lay.addWidget(wc)
-        lang.lay.addSpacing(6)
-        lang.lay.addWidget(label("Your own words to silence (one per line)", None))
-        self.custom = QPlainTextEdit()
-        self.custom.setPlaceholderText("e.g.\nidiot\nshut up\nstupid")
-        self.custom.setFixedHeight(76)
-        self.custom.textChanged.connect(self._changed)
-        lang.lay.addWidget(self.custom)
-        lang.lay.addWidget(label("Never silence these words (comma separated)", None))
-        self.allow = QLineEdit()
-        self.allow.setPlaceholderText("e.g. jesus, god")
-        self.allow.textChanged.connect(self._changed)
-        lang.lay.addWidget(self.allow)
-        lang.lay.addSpacing(6)
+        ml.addLayout(brow)
         prow = QHBoxLayout()
         prow.addWidget(label("Extra silence around each word", None))
-        self.pad_val = label("", "Muted")
         prow.addStretch()
+        self.pad_val = label("", "Muted")
         prow.addWidget(self.pad_val)
-        lang.lay.addLayout(prow)
+        ml.addLayout(prow)
         self.pad = QSlider(Qt.Horizontal)
         self.pad.setRange(0, 50)
+        self.pad.setAccessibleName("Extra silence around each word")
         self.pad.valueChanged.connect(lambda v: (self.pad_val.setText(f"{v / 100:.2f} s"), self._changed()))
-        lang.lay.addWidget(self.pad)
+        ml.addWidget(self.pad)
         self.mute_all = QRadioButton("Silence all sound during the word (recommended)")
         self.mute_center = QRadioButton("Silence only the dialogue speaker on surround sound (music keeps playing)")
         g = QButtonGroup(self)
         for r in (self.mute_all, self.mute_center):
             g.addButton(r)
             r.toggled.connect(self._changed)
-            lang.lay.addWidget(r)
+            ml.addWidget(r)
         self.fade = QCheckBox("Soften the edges of each silence (a 30 ms fade instead of a hard cut)")
         self.fade.setToolTip("Off = like the commercial filters: sound stops exactly at the word.\n"
                              "On = a tiny fade in and out, which can hide clicks with loud music.")
         self.fade.toggled.connect(self._changed)
-        lang.lay.addWidget(self.fade)
-        lang.lay.addStretch()
-        grid.addWidget(lang, 0, 0)
+        ml.addWidget(self.fade)
+        lang.lay.addWidget(self.more_lang)
 
-        # ---- scenes card
-        sc = Card("Scenes", "Parts of the movie to remove. You'll review every one before anything is changed, "
-                            "and can change what happens to each one.")
+        sc = Card("Scenes")
+        sc.lay.setContentsMargins(12, 12, 12, 12)
         self.groups = {}
-        for g, gname, gdesc in SCENE_GROUPS:
-            types = [(k, n, d) for k, tg, n, d in SCENE_TYPES if tg == g]
-            sg = SceneGroup(g, gname, gdesc if g != "custom" else "Anything else to find", types,
-                            text_box=(g == "custom"))
+        for gkey, gname, gdesc in SCENE_GROUPS:
+            types = [(k, n, d) for k, tg, n, d in SCENE_TYPES if tg == gkey]
+            sg = SceneGroup(gkey, gname, gdesc if gkey != "custom" else "Anything else to find", types,
+                            text_box=(gkey == "custom"))
             sg.changed.connect(self._changed)
-            self.groups[g] = sg
+            sg.detailsToggled.connect(self._on_scene_details)
+            self.groups[gkey] = sg
             sc.lay.addWidget(sg)
+        self.more_scenes = Disclosure("scenes", "More scene options")
+        msl = self.more_scenes.content_lay
         brow = QHBoxLayout()
         brow.addWidget(label("When blurring private parts, look", "Small"))
         self.blur_margin = QDoubleSpinBox()
         self.blur_margin.setRange(0.0, 5.0)
         self.blur_margin.setSingleStep(0.5)
         self.blur_margin.setSuffix(" s")
+        self.blur_margin.setAccessibleName("Blur look-around seconds")
         self.blur_margin.setToolTip("Extra time before and after each flagged scene that is searched and blurred, "
                                     "so the first and last moments (and people who move) aren't missed.")
         self.blur_margin.valueChanged.connect(self._changed)
@@ -295,27 +357,34 @@ class SetupPage(QWidget):
         self.blur_size.currentIndexChanged.connect(self._changed)
         brow.addWidget(self.blur_size)
         brow.addStretch()
-        sc.lay.addLayout(brow)
+        msl.addLayout(brow)
+        sc.lay.addWidget(self.more_scenes)
+        sc_col = QWidget()
+        self.scene_col = sc_col
+        scl = QVBoxLayout(sc_col)
+        scl.setContentsMargins(0, 0, 0, 0)
+        scl.setSpacing(6)
+        scl.addWidget(sc)
         self.scene_note = label("", "Small", wrap=True)
-        sc.lay.addWidget(self.scene_note)
-        sc.lay.addStretch()
-        grid.addWidget(sc, 1, 0)          # stacked: each card gets the full width
+        self.scene_note.setAccessibleName("Scene re-encode note")
+        scl.addWidget(self.scene_note)
+        body_lay.addWidget(self.cols_h)
+        body_lay.addWidget(self.cols_v)
+        self.cols_h_lay.addWidget(lang, 1)
+        self.cols_h_lay.addWidget(sc_col, 1)
 
-        # ---- advanced editing (beta), off unless asked for
-        adv = Card()
-        ah = QHBoxLayout()
-        ah.addWidget(label("Advanced Editing", "H2"))
-        ah.addWidget(beta_badge())
-        ah.addStretch()
-        adv.lay.addLayout(ah)
+        adv_card = Card()
+        adv_card.lay.setContentsMargins(12, 12, 12, 12)
+        self.adv = Disclosure("advanced", "Advanced Editing (Beta)")
+        adv_l = self.adv.content_lay
+        adv_l.addWidget(label("Beta: not fully tested yet. Instead of leaving a gap, a silenced word is "
+                              "replaced by a clean spoken one (\"hell\" → \"heck\"). The silence is always made "
+                              "first, so if anything fails the word just stays silent. Nothing here copies a "
+                              "real person's voice: a ready-made voice is chosen to match the speaker's pitch, "
+                              "loudness and timing.", "Muted", wrap=True))
         self.adv_on = QCheckBox("Turn on Advanced Editing")
         self.adv_on.toggled.connect(self._adv_toggled)
-        adv.lay.addWidget(self.adv_on)
-        adv.lay.addWidget(label("Beta: not fully tested yet. Instead of leaving a gap, a silenced word is "
-                                "replaced by a clean spoken one (\"hell\" → \"heck\"). The silence is always made "
-                                "first, so if anything fails the word just stays silent. Nothing here copies a "
-                                "real person's voice: a ready-made voice is chosen to match the speaker's pitch, "
-                                "loudness and timing.", "Muted", wrap=True))
+        adv_l.addWidget(self.adv_on)
         self.adv_box = QWidget()
         av = QFormLayout(self.adv_box)
         av.setContentsMargins(0, 6, 0, 0)
@@ -332,51 +401,137 @@ class SetupPage(QWidget):
         av.addRow("Voice", self.adv_engine)
         self.adv_note = label("", "Small", wrap=True)
         av.addRow("", self.adv_note)
-        adv.lay.addWidget(self.adv_box)
-        grid.addWidget(adv, 2, 0)
-        grid.setColumnStretch(0, 1)
-        grid.setVerticalSpacing(16)
+        self.adv_box.setVisible(False)
+        adv_l.addWidget(self.adv_box)
+        adv_card.lay.addWidget(self.adv)
+        body_lay.addWidget(adv_card)
+        body_lay.addStretch()
 
-        # ---- footer
         foot = QHBoxLayout()
-        foot.addWidget(label("Preset:", "Muted"))
-        self.preset = QComboBox()
-        self.preset.setMinimumWidth(180)
-        self.preset.activated.connect(self._preset_chosen)
-        foot.addWidget(self.preset)
-        foot.addWidget(button("Save as preset…", None, self._save_preset))
+        foot.setSpacing(12)
+        self.save_preset_btn = button("Save as preset…", None, self._save_preset,
+                                      tip="Save these settings under a name you can pick next time")
+        foot.addWidget(self.save_preset_btn)
         foot.addStretch()
+        self.scan_reason = label("", "Small", wrap=True)
+        self.scan_reason.setMaximumWidth(280)
+        self.scan_reason.setVisible(False)
+        foot.addWidget(self.scan_reason)
         self.note = label("", "Small", wrap=True)
-        self.note.setMaximumWidth(420)
+        self.note.setMaximumWidth(360)
         self.note.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         foot.addWidget(self.note)
-        foot.addWidget(button("📥  Use an edit list instead…", "Link", self.useEditList.emit,
-                              tip="Someone (or you, on another PC) already went through this movie and saved an edit\n"
-                                  "list: open it here and skip the scan."))
+        self.edit_list_btn = button("📥  Use an edit list instead…", "Link", self.useEditList.emit,
+                                    tip="Someone (or you, on another PC) already went through this movie and saved an edit\n"
+                                        "list: open it here and skip the scan.")
+        foot.addWidget(self.edit_list_btn)
         self.scan_btn = button("Scan movie  →", "Primary", self.scan.emit)
+        self.scan_btn.setShortcut(QKeySequence("Ctrl+Return"))
         foot.addWidget(self.scan_btn)
         outer.addLayout(foot)
-        self._presets = {}
+
+        self._preset_group = QButtonGroup(self.preset_wrap)
+        self._preset_group.setExclusive(True)
+        self._disclosure_widgets = {"language": self.more_lang, "scenes": self.more_scenes,
+                                    "advanced": self.adv}
+        for w in self._disclosure_widgets.values():
+            w.toggled.connect(self._disclosure_toggled)
 
     # ---- data in/out
     def set_movie(self, info, project, settings, notes=""):
         self._loading = True
-        self.title.setText(Path(project.source).name)
-        self.summary.setText(info.summary())
+        self._settings = settings
+        self._project = project
+        self.title.set_full_text(Path(project.source).name)
+        self.info.setText(info.summary())
+        self.info.setToolTip(info.summary())
         self.track.clear()
         for t in info.audio:
             self.track.addItem(t.describe())
-        self.track.setCurrentIndex(min(project.audio_track, max(0, len(info.audio) - 1)))
+        idx = min(max(int(project.audio_track or 0), 0), max(0, len(info.audio) - 1))
+        if info.audio:
+            self.track.setCurrentIndex(idx)
+        self.track.setVisible(len(info.audio) > 1)
+        self.audio_label.setVisible(len(info.audio) > 1)
+        if len(info.audio) == 1:
+            self.audio_info.setText(f"Audio: {info.audio[0].describe()}")
+            self.audio_info.setVisible(True)
+        else:
+            self.audio_info.setText("")
+            self.audio_info.setVisible(False)
         self.dialogue.setCurrentIndex(max(0, self.dialogue.findData(project.dialogue or "auto")))
+        self._place_dialogue(self._dialogue_should_be_inline(project))
         self._presets = settings.all_presets()
-        self.preset.clear()
-        self.preset.addItems(list(self._presets) + ["Custom"])
+        fallback = "Family night" if "Family night" in self._presets else next(iter(self._presets), "Family night")
+        self._last_preset = settings.last_preset if settings.last_preset in self._presets else fallback
+        self._selected_preset = ""
+        self._rebuild_preset_cards()
+        self._restore_disclosures()
         self.apply(FilterOptions.from_dict(settings.filters))
-        name = settings.last_preset if settings.last_preset in self._presets else "Custom"
-        self.preset.setCurrentText(name)
-        self._loading = False
         self.note.setText(notes)
+        self._loading = False
         self._update_notes()
+        self._sync_cols_orientation()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._sync_cols_orientation)
+
+    def eventFilter(self, obj, event):
+        if obj is self.scroll.viewport() and event.type() == QEvent.Resize:
+            QTimer.singleShot(0, self._sync_cols_orientation)
+        return super().eventFilter(obj, event)
+
+    def _sync_cols_orientation(self):
+        if not hasattr(self, "lang_card"):
+            return
+        width = self.scroll.viewport().width()
+        if width <= 0:
+            return
+        vertical = width < 1100
+        if vertical == self._cols_vertical:
+            return
+        self._cols_vertical = vertical
+        if vertical:
+            self.cols_h_lay.removeWidget(self.lang_card)
+            self.cols_h_lay.removeWidget(self.scene_col)
+            self.cols_h.setVisible(False)
+            self.cols_v_lay.addWidget(self.lang_card)
+            self.cols_v_lay.addWidget(self.scene_col)
+            self.cols_v.setVisible(True)
+        else:
+            self.cols_v_lay.removeWidget(self.lang_card)
+            self.cols_v_lay.removeWidget(self.scene_col)
+            self.cols_v.setVisible(False)
+            self.cols_h_lay.addWidget(self.lang_card, 1)
+            self.cols_h_lay.addWidget(self.scene_col, 1)
+            self.cols_h.setVisible(True)
+
+    def _dialogue_should_be_inline(self, project):
+        if project.dialogue == "foreign":
+            return True
+        if project.dialogue == "auto":
+            skipped = (project.transcript or {}).get("skipped") if isinstance(project.transcript, dict) else ""
+            return skipped == "not English" or bool(project.spoken_language and project.english_share < 0.25)
+        return False
+
+    def _place_dialogue(self, inline):
+        self._dialogue_inline = bool(inline)
+        self.info_row.removeWidget(self.dialogue_box)
+        self.more_lang.content_lay.removeWidget(self.dialogue_box)
+        if self._dialogue_inline:
+            self.info_row.addWidget(self.dialogue_box)
+        else:
+            self.more_lang.content_lay.insertWidget(0, self.dialogue_box)
+        self.dialogue_box.setVisible(True)
+
+    def _on_track_changed(self, i):
+        if not self._loading:
+            self.trackChanged.emit(i)
+
+    def _on_dialogue_changed(self, _i):
+        if not self._loading:
+            self._update_badges()
 
     def apply(self, f: FilterOptions):
         was = self._loading
@@ -387,7 +542,7 @@ class SetupPage(QWidget):
         self.custom.setPlainText(f.custom_words)
         self.allow.setText(f.allow_words)
         self.pad.setValue(int(round(f.padding * 100)))
-        self.pad_val.setText(f"{f.padding:.2f} s")
+        self.pad_val.setText(f"{self.pad.value() / 100:.2f} s")
         (self.mute_center if f.mute_mode == "center" else self.mute_all).setChecked(True)
         self.fade.setChecked(bool(f.mute_fade))
         self.blur_margin.setValue(float(getattr(f, "blur_margin", 1.0)))
@@ -399,13 +554,17 @@ class SetupPage(QWidget):
         self.adv_engine.setCurrentIndex(max(0, self.adv_engine.findData(a.get("engine", "windows"))))
         self.star.setCurrentIndex(max(0, self.star.findData(f.star_style or "stars")))
         self.burned.setCurrentIndex(max(0, self.burned.findData(f.burned_subs or "auto")))
-        chosen = set(f.scenes)
+        chosen = set(f.scenes or [])
+        type_group = {k: tg for k, tg, n, d in SCENE_TYPES}
+        by_group = {g: set() for g, *_ in SCENE_GROUPS}
+        for k in chosen:
+            by_group.setdefault(type_group.get(k, "custom"), set()).add(k)
         for g, sg in self.groups.items():
-            sg.set_state(chosen, (f.scene_sensitivity or {}).get(g, f.sensitivity),
+            sg.set_state(by_group.get(g, set()), (f.scene_sensitivity or {}).get(g, f.sensitivity),
                          (f.scene_actions or {}).get(g, f.scene_action),
                          f.scene_descriptions if g == "custom" else "")
         self._loading = was
-        self._update_notes()
+        self._refresh()
 
     def filters(self) -> FilterOptions:
         return FilterOptions(
@@ -428,10 +587,6 @@ class SetupPage(QWidget):
             scene_sensitivity={g: sg.sensitivity() for g, sg in self.groups.items()},
             scene_actions={g: sg.action_value() for g, sg in self.groups.items()})
 
-    def _adv_toggled(self, on):
-        self.adv_box.setVisible(on)
-        self._changed()
-
     def _advanced(self):
         return {"enabled": self.adv_on.isChecked(), "mode": self.adv_mode.currentData() or "mute",
                 "engine": self.adv_engine.currentData() or "windows"}
@@ -448,15 +603,337 @@ class SetupPage(QWidget):
         return self.dialogue.currentData() or "auto"
 
     def preset_name(self):
-        return self.preset.currentText()
+        if self._selected_preset and self._selected_preset != "Custom":
+            return self._selected_preset
+        return self._last_preset
+
+    # ---- presets
+    @staticmethod
+    def _canonical_filters(f):
+        f = FilterOptions.from_dict(asdict(f)) if isinstance(f, dict) else f
+        groups = [g for g, *_ in SCENE_GROUPS]
+        sens = dict(f.scene_sensitivity or {})
+        acts = dict(f.scene_actions or {})
+        for g in groups:
+            sens[g] = sens.get(g, f.sensitivity)
+            acts[g] = acts.get(g, f.scene_action)
+        adv = f.advanced or {}
+        return {
+            "words": list(f.words or []),
+            "excluded_words": list(f.excluded_words or []),
+            "custom_words": f.custom_words or "",
+            "allow_words": f.allow_words or "",
+            "padding": round(float(f.padding or 0.0), 4),
+            "burned_subs": f.burned_subs or "auto",
+            "star_style": f.star_style or "stars",
+            "mute_mode": f.mute_mode or "all",
+            "mute_fade": bool(f.mute_fade),
+            "blur_margin": round(float(getattr(f, "blur_margin", 1.0) or 0.0), 4),
+            "blur_size": getattr(f, "blur_size", "normal") or "normal",
+            "advanced": {"enabled": bool(adv.get("enabled")), "mode": adv.get("mode", "mute"),
+                         "engine": adv.get("engine", "windows")},
+            "scenes": sorted(f.scenes or []),
+            "scene_descriptions": f.scene_descriptions or "",
+            "scene_sensitivity": {g: int(sens.get(g, f.sensitivity or 3)) for g in groups},
+            "scene_actions": {g: (acts.get(g, f.scene_action or "cut")) for g in groups},
+        }
+
+    def _current_signature(self):
+        return self._canonical_filters(self.filters())
+
+    def _signature_matches(self, preset_dict, signature):
+        return self._canonical_filters(FilterOptions.from_dict(preset_dict)) == signature
 
     def _changed(self, *_):
         if self._loading:
             return
-        cur = asdict(self.filters())
-        match = next((n for n, d in self._presets.items() if FilterOptions.from_dict(d).__dict__ == cur), None)
-        self.preset.setCurrentText(match or "Custom")
+        self._refresh()
+
+    def _refresh(self):
+        self._sync_preset_selection()
+        self._update_summary()
+        self._update_badges()
         self._update_notes()
+
+    def _preset_description(self, name):
+        if name in self.CARD_DESCRIPTION:
+            return self.CARD_DESCRIPTION[name]
+        return "Your saved settings"
+
+    def _rebuild_preset_cards(self):
+        while self.preset_flow.count():
+            item = self.preset_flow.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
+        self._preset_cards = {}
+        self._more_presets_btn = None
+        self._overflow_presets = []
+        self._preset_group = QButtonGroup(self.preset_wrap)
+        self._preset_group.setExclusive(True)
+        order = [k for k in self.PRESET_ORDER if k in self._presets]
+        order += [k for k in self._presets if k not in self.PRESET_ORDER and k != "Custom"]
+        visible_order = order[:8]
+        self._overflow_presets = order[8:]
+        for name in visible_order:
+            card = PresetCard(name, self._preset_description(name))
+            card.toggled.connect(lambda checked, n=name: checked and self._preset_toggled(n))
+            self._preset_group.addButton(card)
+            self.preset_flow.addWidget(card)
+            self._preset_cards[name] = card
+        if self._overflow_presets:
+            self._more_presets_btn = button("More presets ▾", "Link", self._show_more_presets,
+                                            tip="Choose from the remaining saved presets")
+            self.preset_flow.addWidget(self._more_presets_btn)
+        base = self._last_preset if self._last_preset in self._presets else "Family night"
+        self._custom_card = PresetCard("Custom", f"Your changes to {base}")
+        self._custom_card.toggled.connect(lambda checked: checked and self._preset_toggled("Custom"))
+        self._preset_group.addButton(self._custom_card)
+        self.preset_flow.addWidget(self._custom_card)
+        self._preset_cards["Custom"] = self._custom_card
+        self._custom_card.setVisible(False)
+        self.preset_flow.invalidate()
+        self.preset_wrap.update()
+
+    def _show_more_presets(self):
+        menu = QMenu(self)
+        for name in self._overflow_presets:
+            act = menu.addAction(name)
+            act.triggered.connect(lambda checked=False, n=name: self._choose_preset(n))
+        pos = self._more_presets_btn.mapToGlobal(self._more_presets_btn.rect().bottomLeft())
+        menu.exec(pos)
+
+    def _preset_toggled(self, name):
+        if self._loading:
+            return
+        self._choose_preset(name)
+
+    def _choose_preset(self, name):
+        if name == "Custom" or name not in self._presets:
+            self._selected_preset = "Custom"
+            self._show_custom_card(True)
+            self._sync_card_selection()
+            self._update_badges()
+            return
+        self._last_preset = name
+        self.apply(FilterOptions.from_dict(self._presets[name]))
+        self._selected_preset = name
+        self._sync_card_selection()
+        self._update_badges()
+        self._update_summary()
+        self._update_notes()
+
+    def _sync_card_selection(self):
+        chosen = self._selected_preset
+        for name, card in self._preset_cards.items():
+            card.blockSignals(True)
+            card.setChecked(name == chosen)
+            card.blockSignals(False)
+        if self._more_presets_btn is not None:
+            if chosen in self._overflow_presets:
+                self._more_presets_btn.setText(f"{chosen} ▾")
+            else:
+                self._more_presets_btn.setText("More presets ▾")
+
+    def _show_custom_card(self, show):
+        if self._custom_card is None:
+            return
+        self._custom_card.setVisible(bool(show))
+        self.preset_flow.invalidate()
+        self.preset_wrap.update()
+
+    def _sync_preset_selection(self):
+        if not self._preset_cards:
+            return
+        signature = self._current_signature()
+        matches = [n for n, d in self._presets.items() if self._signature_matches(d, signature)]
+        if self._selected_preset in matches:
+            chosen = self._selected_preset
+        elif matches:
+            chosen = matches[0]
+        else:
+            chosen = "Custom"
+        if chosen != "Custom":
+            self._last_preset = chosen
+        self._selected_preset = chosen
+        if self._custom_card is not None:
+            base = self._last_preset if self._last_preset in self._presets else "Family night"
+            self._custom_card.setTextDescription(f"Your changes to {base}")
+            self._show_custom_card(chosen == "Custom")
+        self._sync_card_selection()
+
+    def _save_preset(self):
+        name, ok = QInputDialog.getText(self, "Save preset", "Name for these settings:")
+        if not (ok and name.strip()):
+            return
+        name = name.strip()
+        if name in self._presets:
+            answer = QMessageBox.question(self, "Save preset", f'Replace the preset "{name}"?',
+                                          QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if answer != QMessageBox.Yes:
+                return
+        d = asdict(self.filters())
+        self._presets[name] = d
+        self._rebuild_preset_cards()
+        self._last_preset = name
+        self._selected_preset = name
+        self._sync_card_selection()
+        self._update_badges()
+        self._update_summary()
+        self.savePreset.emit(name, d)
+
+    # ---- disclosures and badges
+    def _restore_disclosures(self):
+        expanded = set(getattr(self._settings, "setup_expanded", []) or []) if self._settings else set()
+        for key, w in self._disclosure_widgets.items():
+            w.set_expanded(key in expanded, persist=False)
+        for g, sg in self.groups.items():
+            sg.set_details_expanded(f"details:{g}" in expanded, persist=False)
+
+    def _persist_disclosure(self, key, on):
+        if self._settings is None or not hasattr(self._settings, "setup_expanded"):
+            return
+        keys = list(self._settings.setup_expanded or [])
+        if on and key not in keys:
+            keys.append(key)
+        if not on and key in keys:
+            keys.remove(key)
+        self._settings.setup_expanded = keys
+        try:
+            self._settings.save()
+        except Exception:  # noqa: BLE001 - disclosure state is best-effort
+            pass
+
+    def _disclosure_toggled(self, key, on):
+        self._persist_disclosure(key, on)
+        if on:
+            w = self._disclosure_widgets.get(key)
+            self._ensure_visible(w.content if w is not None else None)
+
+    def _on_scene_details(self, group, on):
+        self._persist_disclosure(f"details:{group}", on)
+        if on:
+            self._ensure_visible(self.groups[group].details)
+
+    def _ensure_visible(self, widget):
+        if widget is None:
+            return
+        QTimer.singleShot(0, lambda: self.scroll.ensureWidgetVisible(widget))
+
+    def _badge_base_name(self):
+        name = self._selected_preset if self._selected_preset not in ("", "Custom") else self._last_preset
+        if name not in self._presets:
+            name = "Family night" if "Family night" in self._presets else next(iter(self._presets), "")
+        return name
+
+    def _base_filter_options(self):
+        d = self._presets.get(self._badge_base_name())
+        return FilterOptions.from_dict(d) if d else FilterOptions()
+
+    @staticmethod
+    def _badge_text(n):
+        return f"{n} changed" if n else ""
+
+    def _group_base_selected(self, bf, group):
+        type_group = {k: tg for k, tg, n, d in SCENE_TYPES}
+        return {k for k in (bf.scenes or []) if type_group.get(k, "custom") == group}
+
+    def _group_badge_count(self, group, f, bf):
+        sg = self.groups[group]
+        count = 0
+        if group == "custom":
+            if sg.text_value() != (bf.scene_descriptions or ""):
+                count += 1
+        elif set(sg.selected()) != self._group_base_selected(bf, group):
+            count += 1
+        base_sens = (bf.scene_sensitivity or {}).get(group, bf.sensitivity)
+        base_action = (bf.scene_actions or {}).get(group, bf.scene_action)
+        if sg.sensitivity() != int(base_sens):
+            count += 1
+        if sg.action_value() != base_action:
+            count += 1
+        return count
+
+    def _update_badges(self):
+        if not hasattr(self, "more_lang"):
+            return
+        f = self.filters()
+        bf = self._base_filter_options()
+        lang_count = 0
+        if (f.custom_words or "") != (bf.custom_words or ""):
+            lang_count += 1
+        if (f.allow_words or "") != (bf.allow_words or ""):
+            lang_count += 1
+        if abs(float(f.padding or 0) - float(bf.padding or 0)) > 0.001:
+            lang_count += 1
+        if (f.star_style or "stars") != (bf.star_style or "stars"):
+            lang_count += 1
+        if (f.burned_subs or "auto") != (bf.burned_subs or "auto"):
+            lang_count += 1
+        if (f.mute_mode or "all") != (bf.mute_mode or "all"):
+            lang_count += 1
+        if bool(f.mute_fade) != bool(bf.mute_fade):
+            lang_count += 1
+        if not self._dialogue_inline and self.dialogue.currentData() != "auto":
+            lang_count += 1
+        self.more_lang.set_badge(self._badge_text(lang_count))
+        scene_count = 0
+        if abs(float(f.blur_margin or 0) - float(getattr(bf, "blur_margin", 1.0) or 0)) > 0.001:
+            scene_count += 1
+        if (f.blur_size or "normal") != (getattr(bf, "blur_size", "normal") or "normal"):
+            scene_count += 1
+        self.more_scenes.set_badge(self._badge_text(scene_count))
+        for g, sg in self.groups.items():
+            sg.set_details_badge(self._badge_text(self._group_badge_count(g, f, bf)))
+        self.adv.set_badge("On" if self.adv_on.isChecked() else "Off")
+
+    # ---- summary and notes
+    def _update_summary(self):
+        f = self.filters()
+        words = [self.WORD_SUMMARY.get(k, k.replace("_", " ")) for k in f.words]
+        if (f.custom_words or "").strip():
+            words.append("your own words")
+        parts = []
+        if words:
+            parts.append("Silences: " + ", ".join(words) + ".")
+        scene_parts = []
+        active = []
+        for g, sg in self.groups.items():
+            if g == "custom":
+                if sg.text_value():
+                    scene_parts.append(self.GROUP_SUMMARY[g])
+                    active.append(sg)
+            elif sg.selected():
+                scene_parts.append(f"{self.GROUP_SUMMARY[g]} ({len(sg.selected())} types)")
+                active.append(sg)
+        if scene_parts:
+            actions = {sg.action_value() for sg in active}
+            names = ", ".join(scene_parts)
+            if actions == {"mute"}:
+                parts.append(f"Silences sound in: {names}.")
+            else:
+                if actions == {"cut"}:
+                    phrase = "by cutting them out"
+                elif actions == {"black"}:
+                    phrase = "by blacking them out"
+                elif actions == {"black_keep"}:
+                    phrase = "by blacking them out (sound kept)"
+                elif actions == {"blur_parts"}:
+                    phrase = "by blurring the private parts"
+                elif actions == {"blur"}:
+                    phrase = "by blurring them"
+                else:
+                    phrase = "with the chosen actions"
+                verb = "Changes" if len(actions) > 1 else "Removes"
+                parts.append(f"{verb}: {names} {phrase}.")
+        elif words:
+            parts.append("The picture is copied untouched.")
+        if (f.advanced or {}).get("enabled"):
+            parts.append("Silenced words are replaced with a spoken clean word (beta).")
+        self.summary.setText(" ".join(parts) if parts else
+                             "Nothing selected yet. Pick a preset or tick what to filter.")
 
     def _update_notes(self):
         f = self.filters()
@@ -470,33 +947,30 @@ class SetupPage(QWidget):
                          "your credits. You'll be asked to confirm before anything is spent.")
         if hasattr(self, "adv_note"):
             self.adv_note.setText(" ".join(notes))
-        any_scene = bool(f.scenes or f.scene_descriptions)
+        any_scene = bool(f.scenes or (f.scene_descriptions or "").strip())
         if any_scene:
             self.scene_note.setText("Cutting, blacking out or blurring scenes means the video is re-encoded "
                                     "when saving (very high quality; faster with an NVIDIA card).")
         else:
             self.scene_note.setText("No scenes selected: the picture is copied untouched — no quality change.")
-        self.scan_btn.setEnabled(bool(f.words or f.custom_words or any_scene))
+        enabled = bool(f.words or (f.custom_words or "").strip() or any_scene)
+        self.scan_btn.setEnabled(enabled)
+        if enabled:
+            self.scan_btn.setToolTip("Ctrl+Enter starts the scan")
+            self.scan_reason.setText("")
+            self.scan_reason.setVisible(False)
+        else:
+            reason = "Pick at least one word list or scene type to scan for."
+            self.scan_btn.setToolTip(reason)
+            self.scan_btn.setAccessibleDescription(reason)
+            self.scan_reason.setText(reason)
+            self.scan_reason.setVisible(True)
 
-    def _preset_chosen(self, _i):
-        name = self.preset.currentText()
-        if name in self._presets:
-            self.apply(FilterOptions.from_dict(self._presets[name]))
-            self.preset.setCurrentText(name)
-
-    def _save_preset(self):
-        name, ok = QInputDialog.getText(self, "Save preset", "Name for these settings:")
-        if ok and name.strip():
-            name = name.strip()
-            d = asdict(self.filters())
-            self._presets[name] = d
-            if self.preset.findText(name) < 0:
-                self.preset.insertItem(self.preset.count() - 1, name)
-            self.preset.setCurrentText(name)
-            self.savePreset.emit(name, d)
+    def _adv_toggled(self, on):
+        self.adv_box.setVisible(on)
+        self._changed()
 
 
-# =========================================================================== Scan
 
 class ScanPage(QWidget):
     cancel = Signal()
@@ -507,6 +981,8 @@ class ScanPage(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(60, 40, 60, 30)
         lay.setSpacing(14)
+        self.steps = StepIndicator(2)
+        lay.addWidget(self.steps)
         self.title = label("Scanning", "H1")
         lay.addWidget(self.title)
         lay.addWidget(label("You can leave this running and come back. Nothing is changed in your movie.",
@@ -752,6 +1228,8 @@ class ReviewPage(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(36, 22, 36, 20)
         lay.setSpacing(12)
+        self.steps = StepIndicator(3)
+        lay.addWidget(self.steps)
         head = QHBoxLayout()
         head.addWidget(button("←  Change settings", "Link", self.back.emit))
         head.addStretch()
@@ -1279,6 +1757,8 @@ class RenderPage(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(40, 28, 40, 22)
         lay.setSpacing(10)
+        self.steps = StepIndicator(4)
+        lay.addWidget(self.steps)
         self.title = label("Making the clean copy", "H1")
         lay.addWidget(self.title)
         self.sub = label("", "Muted", wrap=True)
