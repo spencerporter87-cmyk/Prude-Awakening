@@ -76,10 +76,12 @@ def test_preset_rematch_after_returning_to_preset_values(qapp):
         qapp.processEvents()
         assert page._selected_preset == "Custom"
         assert page._custom_card.isVisible()
+        assert page.preset_name() == "Custom"
 
         page.pad.setValue(15)
         qapp.processEvents()
         assert page._selected_preset == "Kids"
+        assert page.preset_name() == "Kids"
         assert not page._custom_card.isVisible()
 
         page._choose_preset("Family night")

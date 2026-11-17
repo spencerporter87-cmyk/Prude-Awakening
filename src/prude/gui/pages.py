@@ -614,7 +614,7 @@ class SetupPage(QWidget):
         return self.dialogue.currentData() or "auto"
 
     def preset_name(self):
-        if self._selected_preset and self._selected_preset != "Custom":
+        if self._selected_preset:
             return self._selected_preset
         return self._last_preset
 
