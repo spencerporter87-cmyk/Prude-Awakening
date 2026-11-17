@@ -79,6 +79,7 @@ class Settings:
     recent: list = field(default_factory=list)
     export: dict = field(default_factory=dict)   # last ExportOptions used
     window: list = field(default_factory=list)   # x, y, w, h
+    setup_expanded: list = field(default_factory=list)  # setup disclosures left open (keys)
 
     @property
     def models_path(self):

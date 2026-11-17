@@ -61,6 +61,7 @@ def run_tour(app, out_dir: Path, video=None):
         add(lambda: shot("2c-setup-scenes"))
 
         def show_advanced():
+            w.setup.adv.set_expanded(True)
             w.setup.adv_on.setChecked(True)
             w.setup.adv_mode.setCurrentIndex(w.setup.adv_mode.findData("replace"))
             body = w.setup.adv_on

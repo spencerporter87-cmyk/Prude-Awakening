@@ -41,7 +41,9 @@ jobs:
           mkdir ffmpeg-x && tar -xf ffmpeg.tar.xz -C ffmpeg-x --strip-components=1
           sudo install -m 755 ffmpeg-x/bin/ffmpeg ffmpeg-x/bin/ffprobe /usr/local/bin/
           ffmpeg -version | head -1
+      - name: Qt system libraries
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
       - name: Python packages
-        run: pip install numpy onnxruntime opencv-python-headless pillow pyyaml requests pytest
+        run: pip install numpy onnxruntime opencv-python-headless pillow pyyaml requests pytest PySide6-Essentials PySide6-Addons
       - name: Unit tests
         run: python -m pytest tests -q

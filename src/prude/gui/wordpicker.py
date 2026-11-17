@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QCheckBox, QFrame, QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 
 from ..words import category_groups, group_key
-from .widgets import button, label
+from .widgets import EnterButton, button, label
 
 
 def _friendly(pattern):
@@ -25,15 +25,17 @@ class CategoryBox(QCheckBox):
 
 class WordCategory(QWidget):
     changed = Signal()
+    panelToggled = Signal()
     COLS = 4
 
     def __init__(self, key, name, desc, masked=False, parent=None):
         super().__init__(parent)
         self.key = key
+        self.name = name
         self._loading = False
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(4)
+        lay.setSpacing(2)
 
         head = QHBoxLayout()
         head.setSpacing(8)
@@ -41,13 +43,18 @@ class WordCategory(QWidget):
         self.box.setTristate(True)
         self.box.clicked.connect(self._box_clicked)
         head.addWidget(self.box)
-        d = label(desc, "Small")
+        d = label(desc, "Muted")
         d.setToolTip(desc)
         head.addWidget(d, 1)
         self.count = label("", "Small")
-        head.addWidget(self.count)
-        self.chev = button("▸ Words", "Link", self.toggle, tip="Choose individual words")
-        head.addWidget(self.chev)
+        head.addWidget(self.count, 0, Qt.AlignVCenter)
+        self.chev = EnterButton("▸ Words")
+        self.chev.setObjectName("Link")
+        self.chev.setCursor(Qt.PointingHandCursor)
+        self.chev.setToolTip("Choose individual words")
+        self.chev.clicked.connect(self.toggle)
+        self._sync_chev_accessible()
+        head.addWidget(self.chev, 0, Qt.AlignVCenter)
         lay.addLayout(head)
 
         self.panel = QFrame()
@@ -108,6 +115,14 @@ class WordCategory(QWidget):
         show = not self.panel.isVisible()
         self.panel.setVisible(show)
         self.chev.setText("▾ Words" if show else "▸ Words")
+        self._sync_chev_accessible()
+        self.panelToggled.emit()
+
+    def _sync_chev_accessible(self):
+        state = "expanded" if getattr(self, "panel", None) is not None and self.panel.isVisible() \
+            else "collapsed"
+        self.chev.setAccessibleName(f"{self.name} words, {state}")
+        self.chev.setAccessibleDescription(f"{self.name} individual words, {state}")
 
     # ------------------------------------------------------------ events
     def _box_clicked(self):
