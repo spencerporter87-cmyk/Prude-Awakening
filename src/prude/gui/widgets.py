@@ -397,6 +397,7 @@ class FlowLayout(QLayout):
 
     def addItem(self, item):
         self._items.append(item)
+        self._relayout()
 
     def count(self):
         return len(self._items)
@@ -406,8 +407,21 @@ class FlowLayout(QLayout):
 
     def takeAt(self, index):
         if 0 <= index < len(self._items):
-            return self._items.pop(index)
+            item = self._items.pop(index)
+            self._relayout()
+            return item
         return None
+
+    def _relayout(self):
+        # The flow's size hint does not change when cards are added or removed,
+        # so Qt would never call setGeometry again and new cards keep their
+        # default geometry. Lay out explicitly and let parents re-query heights.
+        w = self.parentWidget()
+        if w is None or w.width() <= 0:
+            self.invalidate()
+            return
+        self.setGeometry(w.rect())
+        w.updateGeometry()
 
     def expandingDirections(self):
         return Qt.Orientations(0)
@@ -429,7 +443,7 @@ class FlowLayout(QLayout):
         size = QSize()
         for item in self._items:
             w = item.widget()
-            if w is not None and not w.isVisible():
+            if w is not None and w.isHidden():
                 continue
             size = size.expandedTo(item.minimumSize())
         m = self.contentsMargins()
@@ -471,7 +485,7 @@ class FlowLayout(QLayout):
                      max(0, rect.width() - m.left() - m.right()),
                      max(0, rect.height() - m.top() - m.bottom()))
         items = [it for it in self._items
-                 if it.widget() is None or it.widget().isVisible()]
+                 if it.widget() is None or not it.widget().isHidden()]
         rows, row, row_w = [], [], 0
         for it in items:
             add = self._natural_width(it) + (self._hspace if row else 0)

@@ -170,8 +170,8 @@ class SetupPage(QWidget):
         self._dialogue_inline = False
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(28, 16, 28, 12)
-        outer.setSpacing(8)
+        outer.setContentsMargins(28, 12, 28, 8)
+        outer.setSpacing(6)
         self.steps = StepIndicator(1)
         outer.addWidget(self.steps)
 
@@ -195,7 +195,9 @@ class SetupPage(QWidget):
         self.track = QComboBox()
         self.track.setMinimumWidth(220)
         self.track.setAccessibleName("Audio track")
+        self.track.setAccessibleDescription("Audio track")
         self.track.currentIndexChanged.connect(self._on_track_changed)
+        self.audio_label.setBuddy(self.track)
         self.dialogue = QComboBox()
         self.dialogue.setAccessibleName("Dialogue language")
         for text, key in (("Detect automatically", "auto"), ("English", "en"),
@@ -225,7 +227,7 @@ class SetupPage(QWidget):
         body = QWidget()
         body_lay = QVBoxLayout(body)
         body_lay.setContentsMargins(0, 0, 0, 0)
-        body_lay.setSpacing(10)
+        body_lay.setSpacing(8)
         self.scroll.setWidget(body)
         outer.addWidget(self.scroll, 1)
         self.scroll.viewport().installEventFilter(self)
@@ -241,9 +243,9 @@ class SetupPage(QWidget):
         self.cols_v.setVisible(False)
 
         who = QVBoxLayout()
-        who.setSpacing(4)
+        who.setSpacing(3)
         who.addWidget(label("Who's watching", "H2"))
-        self.preset_wrap = FlowWidget(margin=0, hspace=10, vspace=10)
+        self.preset_wrap = FlowWidget(margin=0, hspace=10, vspace=8)
         self.preset_flow = self.preset_wrap.flow
         who.addWidget(self.preset_wrap)
         self.summary = label("", "Muted", wrap=True)
@@ -254,8 +256,8 @@ class SetupPage(QWidget):
 
         lang = Card()
         self.lang_card = lang
-        lang.lay.setContentsMargins(12, 10, 12, 10)
-        lang.lay.setSpacing(6)
+        lang.lay.setContentsMargins(12, 8, 12, 8)
+        lang.lay.setSpacing(4)
         lang_top = QHBoxLayout()
         lang_top.setSpacing(8)
         lang_top.addWidget(label("Language", "H2"))
@@ -342,7 +344,8 @@ class SetupPage(QWidget):
         lang.lay.addWidget(self.more_lang)
 
         sc = Card("Scenes")
-        sc.lay.setContentsMargins(12, 12, 12, 12)
+        sc.lay.setContentsMargins(12, 10, 12, 10)
+        sc.lay.setSpacing(5)
         self.groups = {}
         for gkey, gname, gdesc in SCENE_GROUPS:
             types = [(k, n, d) for k, tg, n, d in SCENE_TYPES if tg == gkey]
@@ -380,7 +383,7 @@ class SetupPage(QWidget):
         self.scene_col = sc_col
         scl = QVBoxLayout(sc_col)
         scl.setContentsMargins(0, 0, 0, 0)
-        scl.setSpacing(6)
+        scl.setSpacing(4)
         scl.addWidget(sc)
         self.scene_note = label("", "Small", wrap=True)
         self.scene_note.setAccessibleName("Scene re-encode note")
@@ -391,7 +394,7 @@ class SetupPage(QWidget):
         self.cols_h_lay.addWidget(sc_col, 1)
 
         adv_card = Card()
-        adv_card.lay.setContentsMargins(12, 12, 12, 12)
+        adv_card.lay.setContentsMargins(12, 10, 12, 10)
         self.adv = Disclosure("advanced", "Advanced Editing (Beta)")
         adv_l = self.adv.content_lay
         adv_l.addWidget(label("Beta: not fully tested yet. Instead of leaving a gap, a silenced word is "

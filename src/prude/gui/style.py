@@ -71,7 +71,7 @@ QLabel#StepCurrent {{ color: {TEAL_DARK}; font-weight: 700; }}
 QLabel#StepDone {{ color: {TEAL}; }}
 QLabel#StepTodo {{ color: {MUTED}; }}
 QLabel#StepSep {{ color: {MUTED}; }}
-QCheckBox::indicator:focus, QRadioButton::indicator:focus {{ border: 2px solid {TEAL_DARK}; }}
+QCheckBox:focus, QRadioButton:focus {{ border: 2px solid {TEAL_DARK}; }}
 QPushButton:focus, QComboBox:focus, QLineEdit:focus, QPlainTextEdit:focus, QDoubleSpinBox:focus,
 QSpinBox:focus, QSlider:focus {{ border: 2px solid {TEAL_DARK}; }}
 QPushButton:focus {{ outline: none; }}
