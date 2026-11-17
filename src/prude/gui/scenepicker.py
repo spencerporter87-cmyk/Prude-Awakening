@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout,
                                QPlainTextEdit, QSizePolicy, QSlider, QVBoxLayout, QWidget)
 
-from .widgets import button, label
+from .widgets import EnterButton, button, label
 from .wordpicker import CategoryBox
 
 ACTION_CHOICES = [("cut", "Cut it out"), ("black", "Black screen + silence"),
@@ -58,9 +58,12 @@ class SceneGroup(QFrame):
             head.addWidget(t)
         self.chip = label("", "Muted")
         self.chip.setStyleSheet("background:#F1E8DB; border-radius:9px; padding:2px 8px;")
-        head.addWidget(self.chip)
         head.addStretch()
-        self.details_btn = button("▸ Details", "Link", self.toggle_details)
+        head.addWidget(self.chip)
+        self.details_btn = EnterButton("▸ Details")
+        self.details_btn.setObjectName("Link")
+        self.details_btn.setCursor(Qt.PointingHandCursor)
+        self.details_btn.clicked.connect(self.toggle_details)
         self.details_btn.setAccessibleName(f"{name} details, collapsed")
         head.addWidget(self.details_btn)
         lay.addLayout(head)
@@ -82,8 +85,8 @@ class SceneGroup(QFrame):
                 cb.setAccessibleName(tname)
                 cb.toggled.connect(self._toggled)
                 self.boxes[key] = cb
-                grid.addWidget(cb, i // 3, i % 3)
-            for c in range(3):
+                grid.addWidget(cb, i // 2, i % 2)
+            for c in range(2):
                 grid.setColumnStretch(c, 1)
             dl.addLayout(grid)
         self.text = None
@@ -92,6 +95,7 @@ class SceneGroup(QFrame):
             self.text.setPlaceholderText("One per line, in plain English, e.g.\nsmoking a cigarette\n"
                                          "a person vomiting\na large spider")
             self.text.setFixedHeight(84)
+            self.text.setAccessibleName(f"{name} descriptions, one per line")
             self.text.textChanged.connect(self._toggled)
             dl.addWidget(self.text)
 
@@ -118,7 +122,9 @@ class SceneGroup(QFrame):
         dl.addLayout(row2)
         self.details.setVisible(False)
         lay.addWidget(self.details)
-        self.slider.valueChanged.connect(lambda v: (self.picky.setText(PICKY[v]), self._toggled()))
+        self.slider.valueChanged.connect(lambda v: (self.picky.setText(PICKY[v]),
+                                                    self.slider.setAccessibleDescription(PICKY[v]),
+                                                    self._toggled()))
         self.slider.setValue(3)
         self._sync()
 
@@ -205,6 +211,7 @@ class SceneGroup(QFrame):
         if self.boxes:
             on = len(self.selected())
             self.chip.setText("Off" if on == 0 else f"{on} of {len(self.boxes)} · {action}")
+            self.box.setAccessibleName(f"{self.name}, {self.chip.text()}")
         else:
             self.chip.setText(f"Custom · {action}" if self.text_value() else "Off")
         self.chip.setAccessibleName(self.chip.text())

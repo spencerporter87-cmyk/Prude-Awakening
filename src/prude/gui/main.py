@@ -36,6 +36,22 @@ def setup_logging():
                         format="%(asctime)s %(levelname)s %(message)s")
 
 
+class PageStack(QStackedWidget):
+    """Page area whose minimum size follows the current page, not the largest one."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.currentChanged.connect(lambda *_: self.updateGeometry())
+
+    def minimumSizeHint(self):
+        w = self.currentWidget()
+        return w.minimumSizeHint() if w is not None else super().minimumSizeHint()
+
+    def sizeHint(self):
+        w = self.currentWidget()
+        return w.sizeHint() if w is not None else super().sizeHint()
+
+
 class MainWindow(QMainWindow):
     _found = Signal(object)
 
@@ -58,11 +74,20 @@ class MainWindow(QMainWindow):
         self._gpu_present = None
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(app_icon())
-        self.resize(1240, 820)
+        screen = self.screen() or QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen is not None else None
+        aw, ah = (avail.width(), avail.height()) if avail is not None else (1600, 900)
         if settings.window and len(settings.window) == 4:
             x, y, w, h = settings.window
-            self.setGeometry(x, y, max(900, w), max(640, h))
-        self.stack = QStackedWidget()
+            w = max(900, min(int(w), aw))
+            h = max(640, min(int(h), ah))
+            if avail is not None:
+                x = min(max(int(x), avail.left()), avail.right() - w)
+                y = min(max(int(y), avail.top()), avail.bottom() - h)
+            self.setGeometry(x, y, w, h)
+        else:
+            self.resize(min(1240, aw), min(820, ah))
+        self.stack = PageStack()
         self.setCentralWidget(self.stack)
         self.home, self.setup, self.scanp = HomePage(), SetupPage(), ScanPage()
         self.review, self.renderp = ReviewPage(), RenderPage()
@@ -97,11 +122,29 @@ class MainWindow(QMainWindow):
         self.review.loadList.connect(lambda: self._load_edit_list())
         self.renderp.checkRequested.connect(self._run_check)
         self.renderp.leaksRequested.connect(self._show_leaks)
+        self.stack.currentChanged.connect(self._fit_current_page)
+        self._fit_current_page()
         self.setAcceptDrops(True)
         self.home.updateNow.connect(self.install_update)
         self._update_info = None
         self._found.connect(self._update_found)
         QTimer.singleShot(2500, self.check_for_update)
+
+    # ------------------------------------------------------------ page sizing
+    def _fit_current_page(self, _index=0):
+        """Grow the window (never shrink it) when the current page needs more room."""
+        w = self.stack.currentWidget()
+        if w is None:
+            return
+        need = w.minimumSizeHint()
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        nw = max(self.width(), min(need.width(), avail.width()))
+        nh = max(self.height(), min(need.height(), avail.height()))
+        if (nw, nh) != (self.width(), self.height()):
+            self.resize(nw, nh)
 
     # ------------------------------------------------------------ updates
     def check_for_update(self):

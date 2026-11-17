@@ -54,6 +54,17 @@ def button(text, name=None, slot=None, tip=None):
     return b
 
 
+class EnterButton(QPushButton):
+    """A button that also activates on Enter/Return (Space already works)."""
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and not event.modifiers():
+            self.click()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
 class Card(QFrame):
     def __init__(self, title=None, subtitle=None, parent=None):
         super().__init__(parent)
@@ -245,7 +256,7 @@ class ElideMiddleLabel(QLabel):
 
 
 class StepIndicator(QWidget):
-    """The four journey steps, with the current one marked by weight and text."""
+    """The four journey steps: a numbered marker plus the step name."""
 
     STEPS = ("Choose", "Scan", "Review", "Save")
 
@@ -257,12 +268,24 @@ class StepIndicator(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(10)
         lay.addStretch(1)
+        self.dots = []
         self.labels = []
         for i, name in enumerate(self.STEPS, 1):
-            lab = QLabel()
+            item = QWidget(self)
+            il = QHBoxLayout(item)
+            il.setContentsMargins(0, 0, 0, 0)
+            il.setSpacing(6)
+            dot = QLabel()
+            dot.setObjectName("StepDotTodo")
+            dot.setFixedSize(22, 22)
+            dot.setAlignment(Qt.AlignCenter)
+            self.dots.append(dot)
+            il.addWidget(dot)
+            lab = label(name)
             lab.setObjectName("StepTodo")
             self.labels.append(lab)
-            lay.addWidget(lab)
+            il.addWidget(lab)
+            lay.addWidget(item)
             if i < len(self.STEPS):
                 sep = label("·", "Muted")
                 sep.setObjectName("StepSep")
@@ -272,23 +295,30 @@ class StepIndicator(QWidget):
 
     def set_current(self, current):
         self.current = max(1, min(len(self.STEPS), int(current)))
-        for i, lab in enumerate(self.labels, 1):
+        for i, (dot, lab) in enumerate(zip(self.dots, self.labels), 1):
             name = self.STEPS[i - 1]
             if i < self.current:
+                dot.setObjectName("StepDotDone")
+                dot.setText("✓")
                 lab.setObjectName("StepDone")
-                lab.setText(f"✓ {name}")
+                lab.setText(name)
                 lab.setAccessibleName(f"Step {i}: {name}, done")
             elif i == self.current:
+                dot.setObjectName("StepDotCurrent")
+                dot.setText(str(i))
                 lab.setObjectName("StepCurrent")
-                lab.setText(f"{i} {name}")
+                lab.setText(name)
                 lab.setAccessibleName(f"Step {i}: {name}, current step")
                 lab.setAccessibleDescription("Current step")
             else:
+                dot.setObjectName("StepDotTodo")
+                dot.setText(str(i))
                 lab.setObjectName("StepTodo")
-                lab.setText(f"{i} {name}")
+                lab.setText(name)
                 lab.setAccessibleName(f"Step {i}: {name}, not started")
-            lab.style().unpolish(lab)
-            lab.style().polish(lab)
+            for w in (dot, lab):
+                w.style().unpolish(w)
+                w.style().polish(w)
 
 
 class Disclosure(QWidget):
@@ -305,7 +335,7 @@ class Disclosure(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(8)
-        self.button = QPushButton()
+        self.button = EnterButton()
         self.button.setObjectName("Disclosure")
         self.button.setCheckable(True)
         self.button.setCursor(Qt.PointingHandCursor)
@@ -405,27 +435,69 @@ class FlowLayout(QLayout):
         m = self.contentsMargins()
         return size + QSize(m.left() + m.right(), m.top() + m.bottom())
 
+    def _natural_width(self, item):
+        w = item.widget()
+        nw = getattr(w, "natural_width", None) if w is not None else None
+        return nw or item.sizeHint().width()
+
+    def _row_widths(self, row, area_w):
+        naturals = [self._natural_width(it) for it in row]
+        if area_w <= 0:
+            return naturals
+        widths = list(naturals)
+        extra = area_w - sum(naturals) - self._hspace * max(0, len(row) - 1)
+        if extra > 0:
+            fill = [i for i, it in enumerate(row) if getattr(it.widget(), "fill_row", False)]
+            if fill:
+                share = extra / len(fill)
+                for i in fill:
+                    cap = getattr(row[i].widget(), "max_width", None) or 10 ** 6
+                    widths[i] = min(naturals[i] + share, cap)
+        if len(row) == 1 and widths[0] > area_w:
+            widths[0] = area_w
+        return widths
+
+    def _item_height(self, item, width):
+        w = item.widget()
+        if w is not None:
+            h = w.heightForWidth(width)
+            if h and h > 0:
+                return h
+        return max(item.sizeHint().height(), item.minimumSize().height())
+
     def _do_layout(self, rect, test_only):
         m = self.contentsMargins()
         area = QRect(rect.x() + m.left(), rect.y() + m.top(),
                      max(0, rect.width() - m.left() - m.right()),
                      max(0, rect.height() - m.top() - m.bottom()))
-        x, y, line_h = area.left(), area.top(), 0
-        for item in self._items:
-            w = item.widget()
-            if w is not None and not w.isVisible():
-                continue
-            hint = item.sizeHint()
-            next_x = x + hint.width() + self._hspace
-            if line_h and next_x - self._hspace > area.right():
-                x, y = area.left(), y + line_h + self._vspace
-                next_x = x + hint.width() + self._hspace
-                line_h = 0
-            if not test_only:
-                item.setGeometry(QRect(x, y, hint.width(), hint.height()))
-            x = next_x
-            line_h = max(line_h, hint.height())
-        return y + line_h - rect.y() + m.bottom()
+        items = [it for it in self._items
+                 if it.widget() is None or it.widget().isVisible()]
+        rows, row, row_w = [], [], 0
+        for it in items:
+            add = self._natural_width(it) + (self._hspace if row else 0)
+            if row and row_w + add > area.width():
+                rows.append(row)
+                row, row_w = [it], self._natural_width(it)
+            else:
+                row.append(it)
+                row_w += add
+        if row:
+            rows.append(row)
+        y = area.top()
+        for r in rows:
+            widths = self._row_widths(r, area.width())
+            line_h = 0
+            x = area.left()
+            for it, wdt in zip(r, widths):
+                h = self._item_height(it, wdt)
+                if not test_only:
+                    it.setGeometry(QRect(x, y, wdt, h))
+                x += wdt + self._hspace
+                line_h = max(line_h, h)
+            y += line_h + self._vspace
+        if not rows:
+            return m.top() + m.bottom()
+        return y - self._vspace - rect.y() + m.bottom()
 
 
 class FlowWidget(QWidget):
@@ -446,24 +518,29 @@ class FlowWidget(QWidget):
 
 
 class PresetCard(QRadioButton):
-    """One preset choice: name plus a one-line description, drawn as a card."""
+    """One preset choice: name plus a wrapped description, drawn as a card."""
+
+    arrowRequested = Signal(int)
+    fill_row = True
+    natural_width = 210
+    max_width = 380
 
     def __init__(self, name, description="", parent=None):
         super().__init__(parent)
         self.name = name
         self.description = description or ""
+        self.tab_next = None
+        self.tab_prev = None
         self.setObjectName("PresetCard")
         self.setCheckable(True)
-        self.setAutoExclusive(False)
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMinimumSize(176, 64)
-        self.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        self.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Minimum)
         self._sync_accessible()
 
     def setTextDescription(self, description):
         self.description = description or ""
-        self.setToolTip(self.description)
         self._sync_accessible()
         self.update()
 
@@ -473,19 +550,56 @@ class PresetCard(QRadioButton):
 
     def _sync_accessible(self):
         state = "selected" if self.isChecked() else "not selected"
-        desc = f"{self.description}. " if self.description else ""
-        self.setAccessibleName(f"{self.name} preset, {desc}{state}")
-        self.setAccessibleDescription(f"{desc}{state}")
-        self.setToolTip(self.description)
+        desc = self.description.strip().rstrip(".")
+        self.setAccessibleName(f"{self.name} preset, {desc}. {state}" if desc
+                               else f"{self.name} preset, {state}")
+        self.setAccessibleDescription(f"{desc}. {state}" if desc else state)
+        self.setToolTip(f"{self.name}: {self.description}" if self.description.strip() else self.name)
+
+    def _fonts(self):
+        name_font = self.font()
+        name_font.setBold(self.isChecked())
+        desc_font = self.font()
+        desc_font.setPointSizeF(10.0)
+        return name_font, desc_font
+
+    def _text_width(self, width):
+        return max(48, width - 24 - 40)
+
+    def _height_for(self, width):
+        name_font, desc_font = self._fonts()
+        h = 12 + QFontMetrics(name_font).height() + 2
+        if self.description.strip():
+            fm = QFontMetrics(desc_font)
+            br = fm.boundingRect(QRect(0, 0, self._text_width(width), 100000),
+                                 Qt.TextWordWrap | Qt.AlignLeft, self.description)
+            h += 4 + br.height() + 4
+        return h + 10
+
+    def heightForWidth(self, width):
+        return self._height_for(width)
 
     def sizeHint(self):
-        return QSize(192, 70)
+        return QSize(self.natural_width, self._height_for(self.natural_width))
 
     def minimumSizeHint(self):
-        return QSize(150, 62)
+        return QSize(176, self._height_for(176))
 
-    def _elided(self, text, font, width, mode=Qt.ElideRight):
-        return QFontMetrics(font).elidedText(text, mode, max(10, width))
+    def keyPressEvent(self, event):
+        k = event.key()
+        if k in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down) and not event.modifiers():
+            self.arrowRequested.emit(k)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def focusNextPrevChild(self, next):
+        # Tab/Backtab never reach keyPressEvent; the preset group is one tab stop.
+        target = self.tab_next if next else self.tab_prev
+        if target is not None and target.isVisible():
+            target.setFocus(Qt.TabFocusReason if next else Qt.BacktabFocusReason)
+            return True
+        return super().focusNextPrevChild(next)
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -500,30 +614,34 @@ class PresetCard(QRadioButton):
         if self.hasFocus():
             p.setPen(QPen(QColor("#1E5A66"), 2))
             p.setBrush(Qt.NoBrush)
-            p.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 11, 11)
-        name_font = self.font()
-        name_font.setBold(checked)
-        desc_font = self.font()
-        desc_font.setPointSizeF(10.0)
-        x = card.left() + (30 if checked else 12)
-        right = card.right() - 12
-        avail = right - x
-        name = self._elided(self.name, name_font, avail, Qt.ElideMiddle)
-        name_rect = QRect(x, card.top() + (8 if self.description else card.height() // 2 - 8), avail, 18)
+            p.drawRoundedRect(self.rect().adjusted(2, 2, -2, -2), 9, 9)
+        name_font, desc_font = self._fonts()
+        marker = QRect(card.left() + 12, card.top() + 13, 18, 18)
+        if checked:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor("#2E7D8C"))
+            p.drawEllipse(marker)
+            cf = self.font()
+            cf.setBold(True)
+            cf.setPointSizeF(11)
+            p.setFont(cf)
+            p.setPen(QColor("#FFFFFF"))
+            p.drawText(marker, Qt.AlignCenter, "✓")
+        else:
+            p.setPen(QPen(QColor("#B8A99A"), 1.5))
+            p.setBrush(QColor("#FFFFFF"))
+            p.drawEllipse(marker)
+        x = card.left() + 40
+        avail = card.right() - 12 - x
+        name_h = QFontMetrics(name_font).height()
         p.setFont(name_font)
         p.setPen(QColor("#2A1B2E"))
-        p.drawText(name_rect, Qt.AlignLeft | Qt.AlignVCenter, name)
-        if checked:
-            check_font = self.font()
-            check_font.setBold(True)
-            check_font.setPointSizeF(13)
-            p.setFont(check_font)
-            p.setPen(QColor("#2E7D8C"))
-            p.drawText(QRect(card.left() + 8, card.top() + 8, 18, card.height() - 16),
-                       Qt.AlignCenter, "✓")
-        if self.description:
-            desc = self._elided(self.description, desc_font, avail)
+        name = QFontMetrics(name_font).elidedText(self.name, Qt.ElideMiddle, avail)
+        p.drawText(QRect(x, card.top() + 12, avail, name_h + 2), Qt.AlignLeft | Qt.AlignVCenter, name)
+        if self.description.strip():
             p.setFont(desc_font)
             p.setPen(QColor("#6B566E"))
-            p.drawText(QRect(x, card.top() + 34, avail, 18), Qt.AlignLeft | Qt.AlignVCenter, desc)
+            desc_h = max(0, card.height() - (12 + name_h + 4) - 12)
+            p.drawText(QRect(x, card.top() + 12 + name_h + 4, avail, desc_h),
+                       Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap, self.description)
         p.end()

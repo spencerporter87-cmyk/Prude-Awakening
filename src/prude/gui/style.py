@@ -27,8 +27,10 @@ QPushButton#Primary {{ background: {TEAL}; color: white; border: none; font-weig
 QPushButton#Primary:hover {{ background: {TEAL_DARK}; }}
 QPushButton#Primary:disabled {{ background: #9CC3CA; color: #EEF6F7; }}
 QPushButton#Danger {{ color: {RED}; }}
-QPushButton#Link {{ background: transparent; border: none; color: {TEAL_DARK}; padding: 4px; }}
+QPushButton#Link {{ background: transparent; border: 2px solid transparent; color: {TEAL_DARK};
+                  padding: 4px; }}
 QPushButton#Link:hover {{ text-decoration: underline; }}
+QPushButton#Link:focus {{ border-color: {TEAL_DARK}; }}
 QPushButton#Icon {{ padding: 6px 10px; min-width: 20px; }}
 QCheckBox, QRadioButton {{ spacing: 8px; padding: 3px 0; }}
 QCheckBox::indicator, QRadioButton::indicator {{ width: 18px; height: 18px; }}
@@ -57,14 +59,19 @@ QScrollArea {{ border: none; background: transparent; }}
 QScrollArea > QWidget > QWidget {{ background: transparent; }}
 QToolTip {{ background: {INK}; color: white; border: none; padding: 6px; }}
 QRadioButton#PresetCard {{ background: transparent; border: none; padding: 0; }}
-QPushButton#Disclosure {{ background: transparent; border: none; color: {TEAL_DARK}; padding: 4px 0;
-                         font-weight: 600; text-align: left; }}
+QPushButton#Disclosure {{ background: transparent; border: 2px solid transparent; color: {TEAL_DARK};
+                         padding: 2px 0; font-weight: 600; text-align: left; }}
 QPushButton#Disclosure:hover {{ text-decoration: underline; }}
+QPushButton#Disclosure:focus {{ border-color: {TEAL_DARK}; }}
+QLabel#StepDotDone, QLabel#StepDotCurrent, QLabel#StepDotTodo {{ border-radius: 11px; font-weight: 700; }}
+QLabel#StepDotDone {{ background: {TEAL}; color: white; }}
+QLabel#StepDotCurrent {{ background: {TEAL_DARK}; color: white; }}
+QLabel#StepDotTodo {{ border: 1.5px solid #C9BBA8; color: {MUTED}; background: transparent; }}
 QLabel#StepCurrent {{ color: {TEAL_DARK}; font-weight: 700; }}
 QLabel#StepDone {{ color: {TEAL}; }}
 QLabel#StepTodo {{ color: {MUTED}; }}
 QLabel#StepSep {{ color: {MUTED}; }}
-QCheckBox:focus::indicator, QRadioButton:focus::indicator {{ border: 2px solid {TEAL_DARK}; }}
+QCheckBox::indicator:focus, QRadioButton::indicator:focus {{ border: 2px solid {TEAL_DARK}; }}
 QPushButton:focus, QComboBox:focus, QLineEdit:focus, QPlainTextEdit:focus, QDoubleSpinBox:focus,
 QSpinBox:focus, QSlider:focus {{ border: 2px solid {TEAL_DARK}; }}
 QPushButton:focus {{ outline: none; }}
