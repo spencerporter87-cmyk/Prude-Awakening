@@ -1528,13 +1528,23 @@ class ReviewPage(QWidget):
             return {}
         return asdict(filt) if hasattr(filt, "__dataclass_fields__") else dict(filt)
 
+    def _words_scan_done(self):
+        t = getattr(self.project, "transcript", None) or {}
+        return t.get("track") == getattr(self.project, "audio_track", 0) and "words" in t
+
+    def _scenes_scan_done(self):
+        try:
+            return (Path(self.project.dir) / "scene_cache.npz").exists()
+        except OSError:
+            return False
+
     def _scan_had_words(self):
         f = self._scan_filters()
-        return bool(f.get("words") or str(f.get("custom_words") or "").strip())
+        return self._words_scan_done() and bool(f.get("words") or str(f.get("custom_words") or "").strip())
 
     def _scan_had_scenes(self):
         f = self._scan_filters()
-        return bool(f.get("scenes") or str(f.get("scene_descriptions") or "").strip())
+        return self._scenes_scan_done() and bool(f.get("scenes") or str(f.get("scene_descriptions") or "").strip())
 
     def _viewer_name(self):
         return (getattr(self.project, "profile", "") or "").strip()
