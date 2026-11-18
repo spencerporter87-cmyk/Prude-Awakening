@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFontMetrics, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtCore import QCoreApplication, QEvent, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFontMetrics, QHelpEvent, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLayout, QLineEdit, QProgressBar, QPushButton,
                                QRadioButton, QSizePolicy, QToolTip, QVBoxLayout, QWidget)
 
@@ -257,7 +257,8 @@ class ElideMiddleLabel(QLabel):
 
     def _show_tooltip(self):
         if self._full and self.hasFocus():
-            QToolTip.showText(self.mapToGlobal(self.rect().bottomLeft()), self._full, self)
+            pos = self.rect().center()
+            QCoreApplication.postEvent(self, QHelpEvent(QEvent.Type.ToolTip, pos, self.mapToGlobal(pos)))
 
     def _update_text(self):
         if not self._full:

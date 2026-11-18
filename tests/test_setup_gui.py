@@ -1,4 +1,5 @@
 import os
+import sys
 from dataclasses import asdict
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -7,7 +8,8 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QFontDatabase
+from PySide6.QtWidgets import QApplication, QToolTip
 
 from prude.gui.pages import SetupPage
 from prude.gui.style import QSS
@@ -46,6 +48,13 @@ def close(page, qapp):
     qapp.processEvents()
 
 
+def font_metrics_reliable():
+    # Windows offscreen has no font database, so column geometry is not meaningful there.
+    if sys.platform != "win32" or not os.environ.get("QT_QPA_PLATFORM", "").startswith("offscreen"):
+        return True
+    return bool(QFontDatabase.families())
+
+
 def test_default_setup_matches_spec_and_fits(qapp):
     page, _ = make_setup(qapp)
     try:
@@ -59,9 +68,10 @@ def test_default_setup_matches_spec_and_fits(qapp):
         assert not page.more_scenes.is_expanded()
         assert not page.adv.is_expanded()
         assert page._more_presets_btn is None
-        # Exact vertical fit depends on font metrics; Windows offscreen has no font database.
-        assert not page._cols_vertical
-        assert page.scroll.horizontalScrollBar().maximum() == 0
+        # Column geometry depends on font metrics; skip it where offscreen has no font database.
+        if font_metrics_reliable():
+            assert not page._cols_vertical
+            assert page.scroll.horizontalScrollBar().maximum() == 0
         assert page.steps.current == 1
     finally:
         close(page, qapp)
@@ -79,6 +89,23 @@ def test_word_category_descriptions_keep_full_text_accessible(qapp):
         assert desc.whatsThis() == full
         assert desc.focusPolicy() == Qt.StrongFocus
     finally:
+        close(page, qapp)
+
+
+def test_word_category_description_focus_shows_tooltip(qapp):
+    page, _ = make_setup(qapp)
+    try:
+        QToolTip.hideText()
+        desc = page.cats["strong"].findChild(ElideMiddleLabel)
+        full = "F-word, S-word and other hard swearing"
+        desc.setFocus()
+        qapp.processEvents()
+        qapp.processEvents()
+        assert desc.hasFocus()
+        assert QToolTip.isVisible()
+        assert QToolTip.text() == full
+    finally:
+        QToolTip.hideText()
         close(page, qapp)
 
 
@@ -181,15 +208,19 @@ def test_expanded_word_panel_stacks_cards_without_horizontal_scroll(qapp):
         page.cats["slurs"].toggle()
         qapp.processEvents()
         qapp.processEvents()
-        assert page._cols_vertical
-        assert page.cols_v.isVisible()
-        assert not page.cols_h.isVisible()
+        if font_metrics_reliable():
+            assert page._cols_vertical
+            assert page.cols_v.isVisible()
+            assert not page.cols_h.isVisible()
+        assert page.cats["slurs"].panel.isVisible()
 
         page.cats["slurs"].toggle()
         qapp.processEvents()
         qapp.processEvents()
-        assert not page._cols_vertical
-        assert page.cols_h.isVisible()
-        assert not page.cols_v.isVisible()
+        if font_metrics_reliable():
+            assert not page._cols_vertical
+            assert page.cols_h.isVisible()
+            assert not page.cols_v.isVisible()
+        assert not page.cats["slurs"].panel.isVisible()
     finally:
         close(page, qapp)
