@@ -163,8 +163,10 @@ def exact_cuts(info, start, length, cache=None):
     r = run([ffmpeg(), "-hide_banner", "-nostdin", "-copyts", "-ss", f"{max(0.0, start):.3f}",
              "-i", str(info.path), "-t", f"{length:.3f}", "-map", f"0:{info.video['index']}", "-an", "-sn",
              "-vf", "scale=192:-2,select='gt(scene,0.30)',showinfo", "-f", "null", "-"], timeout=120)
-    found = [round(float(m) - info.format_start, 3)
-             for m in re.findall(r"pts_time:\s*([0-9.]+)", r.stderr or "")]
+    # Some FFmpeg builds ignore -t with -copyts, so keep only cuts inside the window.
+    found = [t for t in (round(float(m) - info.format_start, 3)
+                         for m in re.findall(r"pts_time:\s*([0-9.]+)", r.stderr or ""))
+             if start - 0.001 <= t <= start + length + 0.001]
     if cache is not None:
         cache[key] = found
     return found
