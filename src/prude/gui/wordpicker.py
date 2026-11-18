@@ -1,10 +1,10 @@
 """Language categories that open up (▸) to show every word, each with its own tick box."""
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QCheckBox, QFrame, QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QFrame, QGridLayout, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 
 from ..words import category_groups, group_key
-from .widgets import EnterButton, button, label
+from .widgets import ElideMiddleLabel, EnterButton, button, label
 
 
 def _friendly(pattern):
@@ -43,8 +43,9 @@ class WordCategory(QWidget):
         self.box.setTristate(True)
         self.box.clicked.connect(self._box_clicked)
         head.addWidget(self.box)
-        d = label(desc, "Muted")
-        d.setToolTip(desc)
+        d = ElideMiddleLabel(desc)
+        d.setObjectName("Muted")
+        d.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         head.addWidget(d, 1)
         self.count = label("", "Small")
         head.addWidget(self.count, 0, Qt.AlignVCenter)
