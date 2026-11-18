@@ -729,9 +729,10 @@ def test_burned_in_subtitles_read(tmp_path):
     # RapidOCR can also read the run-together "fuckis"; the plain word must still be found once.
     norms = [i["norm"] for i in items]
     assert norms.count("fuck") == 1 and all(n.startswith("fuck") for n in norms), items
-    items = [i for i in items if i["norm"] == "fuck"]
-    assert 2.0 <= items[0]["start"] <= 3.2 and 5.8 <= items[0]["end"] <= 7.0
-    x, y, w, h = items[0]["box"]
+    # Frames read as "fuckis" are blurred by their own item at the same spot, so check the union.
+    start, end = min(i["start"] for i in items), max(i["end"] for i in items)
+    assert 2.0 <= start <= 3.2 and 5.8 <= end <= 7.0, items
+    x, y, w, h = next(i for i in items if i["norm"] == "fuck")["box"]
     assert y > 720 * 0.6 and w < 400
 
 
