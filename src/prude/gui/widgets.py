@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import QRect, QSize, Qt, Signal
+from PySide6.QtCore import QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLayout, QLineEdit, QProgressBar, QPushButton,
                                QRadioButton, QSizePolicy, QToolTip, QVBoxLayout, QWidget)
@@ -239,6 +239,7 @@ class ElideMiddleLabel(QLabel):
         self.setToolTip(self._full)
         self.setAccessibleName(self._full)
         self.setAccessibleDescription(self._full)
+        self.setWhatsThis(self._full)
         self._update_text()
 
     def resizeEvent(self, event):
@@ -248,11 +249,15 @@ class ElideMiddleLabel(QLabel):
     def focusInEvent(self, event):
         super().focusInEvent(event)
         if self._full:
-            QToolTip.showText(self.mapToGlobal(self.rect().bottomLeft()), self._full, self)
+            QTimer.singleShot(0, self._show_tooltip)
 
     def focusOutEvent(self, event):
         QToolTip.hideText()
         super().focusOutEvent(event)
+
+    def _show_tooltip(self):
+        if self._full and self.hasFocus():
+            QToolTip.showText(self.mapToGlobal(self.rect().bottomLeft()), self._full, self)
 
     def _update_text(self):
         if not self._full:
