@@ -6,10 +6,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from prude.gui.pages import SetupPage
 from prude.gui.style import QSS
+from prude.gui.widgets import ElideMiddleLabel
 from prude.media import AudioTrack, MediaInfo
 from prude.project import Project
 from prude.settings import BUILTIN_PRESETS, Settings
@@ -60,6 +62,20 @@ def test_default_setup_matches_spec_and_fits(qapp):
         assert page.scroll.verticalScrollBar().maximum() == 0
         assert not page.scroll.horizontalScrollBar().isVisible()
         assert page.steps.current == 1
+    finally:
+        close(page, qapp)
+
+
+def test_word_category_descriptions_keep_full_text_accessible(qapp):
+    page, _ = make_setup(qapp)
+    try:
+        desc = page.cats["strong"].findChild(ElideMiddleLabel)
+        full = "F-word, S-word and other hard swearing"
+        assert desc is not None
+        assert desc.toolTip() == full
+        assert desc.accessibleName() == full
+        assert desc.accessibleDescription() == full
+        assert desc.focusPolicy() == Qt.StrongFocus
     finally:
         close(page, qapp)
 

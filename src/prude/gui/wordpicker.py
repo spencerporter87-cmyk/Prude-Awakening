@@ -46,6 +46,7 @@ class WordCategory(QWidget):
         d = ElideMiddleLabel(desc)
         d.setObjectName("Muted")
         d.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        d.setFocusPolicy(Qt.StrongFocus)
         head.addWidget(d, 1)
         self.count = label("", "Small")
         head.addWidget(self.count, 0, Qt.AlignVCenter)
