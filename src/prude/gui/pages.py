@@ -26,8 +26,8 @@ from ..subtitles import TimeMap
 from .player import HAVE_MM, Player
 from .scenepicker import SceneGroup, action_combo
 from .wordpicker import WordCategory
-from .widgets import (Card, Disclosure, DropZone, ElideMiddleLabel, FlowWidget, PresetCard, StageRow,
-                      StepIndicator, TimeEdit, beta_badge, button, fmt_time, icon_pixmap, label)
+from .widgets import (Card, Disclosure, DropZone, ElideMiddleLabel, EnterButton, FlowWidget, PresetCard,
+                      StageRow, StepIndicator, TimeEdit, beta_badge, button, fmt_time, icon_pixmap, label)
 
 
 def page():
@@ -1393,14 +1393,18 @@ class ReviewPage(QWidget):
         wl = QVBoxLayout(wt)
         wl.setContentsMargins(12, 12, 12, 12)
         bar = QHBoxLayout()
-        bar.addWidget(button("Select all", None, lambda: self._set_all(True)))
-        bar.addWidget(button("Select none", None, lambda: self._set_all(False)))
-        bar.addWidget(button("Untick the unsure ones", None, self._untick_unsure))
+        self.words_bulk = [button("Select all", None, lambda: self._set_all(True)),
+                           button("Select none", None, lambda: self._set_all(False)),
+                           button("Untick the unsure ones", None, self._untick_unsure)]
+        for b in self.words_bulk:
+            bar.addWidget(b)
         self.only_unsure = QCheckBox("Show only the unsure ones")
         self.only_unsure.toggled.connect(self._refilter)
+        self.words_bulk.append(self.only_unsure)
         bar.addWidget(self.only_unsure)
         bar.addStretch()
-        bar.addWidget(button("+  Add a mute…", None, self._add_mute))
+        self.add_mute_btn = button("+  Add a mute…", None, self._add_mute)
+        bar.addWidget(self.add_mute_btn)
         wl.addLayout(bar)
         self.table = QTableWidget(0, len(self.COLS))
         self.table.setHorizontalHeaderLabels(self.COLS)
@@ -1421,6 +1425,14 @@ class ReviewPage(QWidget):
         self.table.setWordWrap(False)
         self.table.setTextElideMode(Qt.ElideRight)
         self.table.itemChanged.connect(self._item_changed)
+        self.words_empty, self.words_empty_title, self.words_empty_sub, self.words_empty_link = \
+            self._empty_card()
+        self.words_empty.setVisible(False)
+        self.words_empty_space = QWidget()
+        self.words_empty_space.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        self.words_empty_space.setVisible(False)
+        wl.addWidget(self.words_empty)
+        wl.addWidget(self.words_empty_space)
         wl.addWidget(self.table)
         self.tabs.addTab(wt, "Words")
         # scenes
@@ -1430,16 +1442,27 @@ class ReviewPage(QWidget):
         sbar = QHBoxLayout()
         self.show_pics = QCheckBox("Show pictures unblurred")
         self.show_pics.toggled.connect(self._toggle_blur)
-        sbar.addWidget(self.show_pics)
         self.only_unsure_s = QCheckBox("Show only the unsure ones")
         self.only_unsure_s.toggled.connect(self._refilter)
-        sbar.addWidget(self.only_unsure_s)
-        sbar.addWidget(button("Untick the unsure ones", None, self._untick_unsure_scenes))
+        self.scenes_bulk = [self.show_pics, self.only_unsure_s,
+                            button("Untick the unsure ones", None, self._untick_unsure_scenes)]
+        for w in self.scenes_bulk:
+            sbar.addWidget(w)
         sbar.addStretch()
-        sbar.addWidget(button("🖌  Paint a blur…", None, lambda: self._paint(),
-                              tip="Paint over exactly what should be blurred, frame by frame"))
-        sbar.addWidget(button("+  Add a scene to remove…", None, self._add_scene))
+        self.scene_paint_btn = button("🖌  Paint a blur…", None, lambda: self._paint(),
+                                      tip="Paint over exactly what should be blurred, frame by frame")
+        sbar.addWidget(self.scene_paint_btn)
+        self.add_scene_btn = button("+  Add a scene to remove…", None, self._add_scene)
+        sbar.addWidget(self.add_scene_btn)
+        self.scenes_empty, self.scenes_empty_title, self.scenes_empty_sub, self.scenes_empty_link = \
+            self._empty_card()
+        self.scenes_empty.setVisible(False)
         sl.addLayout(sbar)
+        sl.addWidget(self.scenes_empty)
+        self.scenes_empty_space = QWidget()
+        self.scenes_empty_space.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        self.scenes_empty_space.setVisible(False)
+        sl.addWidget(self.scenes_empty_space)
         self.scene_scroll = QScrollArea()
         self.scene_scroll.setWidgetResizable(True)
         self.scene_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -1492,6 +1515,94 @@ class ReviewPage(QWidget):
             self.tabs.setCurrentIndex(1)
         else:
             self.tabs.setCurrentIndex(0)
+
+    def _empty_card(self, title="", subtitle="", link_text=""):
+        card = Card()
+        title_lab = label(title, "H2")
+        sub_lab = label(subtitle, "Muted", wrap=True)
+        link = EnterButton(link_text)
+        link.setObjectName("Link")
+        link.setCursor(Qt.PointingHandCursor)
+        link.clicked.connect(self.back.emit)
+        card.lay.addWidget(title_lab)
+        card.lay.addWidget(sub_lab)
+        link_row = QHBoxLayout()
+        link_row.addWidget(link)
+        link_row.addStretch()
+        card.lay.addLayout(link_row)
+        return card, title_lab, sub_lab, link
+
+    def _scan_filters(self):
+        f = getattr(self.project, "scan_filters", None) or {}
+        if f:
+            return f
+        filt = getattr(self, "filters", None)
+        if filt is None:
+            return {}
+        return asdict(filt) if hasattr(filt, "__dataclass_fields__") else dict(filt)
+
+    def _words_scan_done(self):
+        t = getattr(self.project, "transcript", None) or {}
+        return t.get("track") == getattr(self.project, "audio_track", 0) and "words" in t
+
+    def _scenes_scan_done(self):
+        try:
+            return (Path(self.project.dir) / "scene_cache.npz").exists()
+        except OSError:
+            return False
+
+    def _scan_had_words(self):
+        f = self._scan_filters()
+        return self._words_scan_done() and bool(f.get("words") or str(f.get("custom_words") or "").strip())
+
+    def _scan_had_scenes(self):
+        f = self._scan_filters()
+        return self._scenes_scan_done() and bool(f.get("scenes") or str(f.get("scene_descriptions") or "").strip())
+
+    def _viewer_name(self):
+        return (getattr(self.project, "profile", "") or "").strip()
+
+    def _review_has_content(self):
+        return bool(getattr(self, "rows", [])) or bool(getattr(self.project, "scenes", []) or []) or \
+            bool(getattr(self.project, "paint", []) or [])
+
+    def _refresh_empty_state(self):
+        if self.project is None or not hasattr(self, "rows"):
+            return
+        words_empty = not self.rows
+        scenes_empty = not self.project.scenes and not (self.project.paint or [])
+        self._empty_review = not self._review_has_content()
+        dur = fmt_time(float(getattr(self.info, "duration", 0.0) or 0.0), False)
+        viewer = self._viewer_name()
+
+        self.words_empty.setVisible(words_empty)
+        self.words_empty_space.setVisible(words_empty)
+        self.table.setVisible(not words_empty)
+        for w in self.words_bulk:
+            w.setEnabled(not words_empty)
+        if words_empty:
+            if self._scan_had_words():
+                found = (f"found nothing from {viewer}'s word lists." if viewer else
+                         "found nothing from the word lists in your settings.")
+                self.words_empty_title.setText("Scan finished: no words to silence")
+                self.words_empty_sub.setText(f"The scan listened to all {dur} and {found}")
+            else:
+                self.words_empty_title.setText("Words weren't part of this scan")
+                self.words_empty_sub.setText("Turn on a word list in settings to look for some.")
+            self.words_empty_link.setText("Check the word lists in settings and scan again")
+
+        show_scene_card = scenes_empty and self._scan_had_scenes()
+        self.scenes_empty.setVisible(show_scene_card)
+        self.scenes_empty_space.setVisible(show_scene_card)
+        self.scene_scroll.setVisible(not show_scene_card)
+        for w in self.scenes_bulk:
+            w.setEnabled(bool(self.project.scenes))
+        if show_scene_card:
+            found = (f"found none of {viewer}'s scene types." if viewer else
+                     "found none of the scene types in your settings.")
+            self.scenes_empty_title.setText("Scan finished: no scenes to remove")
+            self.scenes_empty_sub.setText(f"The scan watched all {dur} and {found}")
+            self.scenes_empty_link.setText("Check the scene options in settings and scan again")
 
     def _sub_rows(self):
         """Subtitle-only rows: shown when the dialogue isn't English (nothing to silence, only stars)."""
@@ -1569,6 +1680,12 @@ class ReviewPage(QWidget):
                 it.widget().deleteLater()
         self.scene_rows = []
         painted = list(getattr(self.project, "paint", None) or [])
+        scenes_scanned = self._scan_had_scenes()
+        if not self.project.scenes and scenes_scanned:
+            viewer = self._viewer_name()
+            self.scene_list.addWidget(label(
+                f"The scan found none of {viewer}'s scene types." if viewer else
+                "The scan found none of the scene types in your settings.", "Muted"))
         if painted:
             self.scene_list.addWidget(label(f"Painted blurs and removed blurs ({len(painted)})"
                                             if any(x.get("mode") == "clear" for x in painted)
@@ -1576,8 +1693,9 @@ class ReviewPage(QWidget):
             for pt in painted:
                 self.scene_list.addWidget(PaintRow(pt, self._painted_changed, self._paint, self._see_edited,
                                                    self._paint_delete, float(getattr(self.info, "fps", 24.0) or 24.0)))
-            self.scene_list.addWidget(label("Scenes", "H2"))
-        if not self.project.scenes:
+            if self.project.scenes or not scenes_scanned:
+                self.scene_list.addWidget(label("Scenes", "H2"))
+        if not self.project.scenes and not scenes_scanned:
             self.scene_list.addWidget(label(
                 "No scenes to remove. (Turn on scene options in settings to look for some.)", "Muted"))
         for s in self.project.scenes:
@@ -1783,6 +1901,7 @@ class ReviewPage(QWidget):
         self.player.timeline.set_plan(dur, p.mutes, p.scenes + drawn, self.filters.scene_action)
 
     def _update(self):
+        self._refresh_empty_state()
         self._refresh_timeline()
         mutes = [m for m in self.project.mutes if m.get("on", True)]
         scenes = [s for s in self.project.scenes if s.get("on", True)]
@@ -1813,8 +1932,21 @@ class ReviewPage(QWidget):
             parts.append("video will be re-encoded at very high quality")
         else:
             parts.append("picture copied untouched")
-        self.summary.setText(" · ".join(parts) + ".")
-        self.go.setEnabled(bool(mutes or scenes or subs or drawn))
+        can_make = bool(mutes or scenes or subs or drawn)
+        if getattr(self, "_empty_review", False):
+            who = self._viewer_name() or "your settings"
+            self.summary.setText("Nothing to change yet: the scan found no words or scenes for "
+                                 f"{who}. Add a mute or a scene, paint a blur, or change settings and scan again.")
+        else:
+            self.summary.setText(" · ".join(parts) + ".")
+        self.go.setEnabled(can_make)
+        if getattr(self, "_empty_review", False):
+            tip = "Nothing to change yet: add a mute, a scene or a blur first."
+            self.go.setToolTip(tip)
+            self.go.setAccessibleDescription(tip)
+        else:
+            self.go.setToolTip("")
+            self.go.setAccessibleDescription("")
 
 
 def clean_timeline(project, filters, duration):
