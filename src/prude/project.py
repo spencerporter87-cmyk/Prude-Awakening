@@ -171,6 +171,12 @@ class Project:
                     d["source"] = source
                     proj = cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
                     proj.save()
+                    try:                                    # the scan cache stays with the movie when it moves
+                        cache = old.parent / "scene_cache.npz"
+                        if cache.exists():
+                            shutil.copy2(cache, proj.dir / "scene_cache.npz")
+                    except OSError:
+                        pass
                     return proj
             except Exception:                               # noqa: BLE001 - start fresh
                 pass

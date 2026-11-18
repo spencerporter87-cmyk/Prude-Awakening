@@ -166,6 +166,30 @@ def test_imported_filters_without_scan_do_not_claim_scan(qapp, no_multimedia, mo
         close(page, qapp)
 
 
+def test_moved_scanned_movie_keeps_scene_empty_card(qapp, no_multimedia, movie, tmp_path):
+    f = FilterOptions(words=["strong"], scenes=["nudity"], scene_action="cut")
+    project = Project.open(movie)
+    project.profile = "Family night"
+    project.scan_filters = asdict(f)
+    mark_scanned(project, scenes=True)
+    project.save()
+
+    moved = tmp_path / "moved" / movie.name
+    moved.parent.mkdir()
+    moved.write_bytes(movie.read_bytes())
+    project = Project.open(moved)
+    assert (project.dir / "scene_cache.npz").exists()
+
+    page = make_review(qapp, project, f)
+    try:
+        assert page.words_empty_title.text() == "Scan finished: no words to silence"
+        assert page.scenes_empty_title.text() == "Scan finished: no scenes to remove"
+        assert not page.scenes_empty.isHidden()
+        assert page.summary.text().startswith("Nothing to change yet")
+    finally:
+        close(page, qapp)
+
+
 def test_adding_and_removing_last_mute_leaves_and_returns_empty(qapp, no_multimedia, movie):
     project, filters = scanned_empty(movie)
     page = make_review(qapp, project, filters)
