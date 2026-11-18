@@ -26,8 +26,8 @@ from ..subtitles import TimeMap
 from .player import HAVE_MM, Player
 from .scenepicker import SceneGroup, action_combo
 from .wordpicker import WordCategory
-from .widgets import (Card, Disclosure, DropZone, ElideMiddleLabel, FlowWidget, PresetCard, StageRow,
-                      StepIndicator, TimeEdit, beta_badge, button, fmt_time, icon_pixmap, label)
+from .widgets import (Card, Disclosure, DropZone, ElideMiddleLabel, EnterButton, FlowWidget, PresetCard,
+                      StageRow, StepIndicator, TimeEdit, beta_badge, button, fmt_time, icon_pixmap, label)
 
 
 def page():
@@ -1428,7 +1428,11 @@ class ReviewPage(QWidget):
         self.words_empty, self.words_empty_title, self.words_empty_sub, self.words_empty_link = \
             self._empty_card()
         self.words_empty.setVisible(False)
+        self.words_empty_space = QWidget()
+        self.words_empty_space.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        self.words_empty_space.setVisible(False)
         wl.addWidget(self.words_empty)
+        wl.addWidget(self.words_empty_space)
         wl.addWidget(self.table)
         self.tabs.addTab(wt, "Words")
         # scenes
@@ -1455,6 +1459,10 @@ class ReviewPage(QWidget):
         self.scenes_empty.setVisible(False)
         sl.addLayout(sbar)
         sl.addWidget(self.scenes_empty)
+        self.scenes_empty_space = QWidget()
+        self.scenes_empty_space.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        self.scenes_empty_space.setVisible(False)
+        sl.addWidget(self.scenes_empty_space)
         self.scene_scroll = QScrollArea()
         self.scene_scroll.setWidgetResizable(True)
         self.scene_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -1512,11 +1520,16 @@ class ReviewPage(QWidget):
         card = Card()
         title_lab = label(title, "H2")
         sub_lab = label(subtitle, "Muted", wrap=True)
-        link = button(link_text, "Link", self.back.emit)
+        link = EnterButton(link_text)
+        link.setObjectName("Link")
+        link.setCursor(Qt.PointingHandCursor)
+        link.clicked.connect(self.back.emit)
         card.lay.addWidget(title_lab)
         card.lay.addWidget(sub_lab)
-        card.lay.addWidget(link)
-        card.lay.addStretch()
+        link_row = QHBoxLayout()
+        link_row.addWidget(link)
+        link_row.addStretch()
+        card.lay.addLayout(link_row)
         return card, title_lab, sub_lab, link
 
     def _scan_filters(self):
@@ -1563,6 +1576,7 @@ class ReviewPage(QWidget):
         viewer = self._viewer_name()
 
         self.words_empty.setVisible(words_empty)
+        self.words_empty_space.setVisible(words_empty)
         self.table.setVisible(not words_empty)
         for w in self.words_bulk:
             w.setEnabled(not words_empty)
@@ -1579,9 +1593,10 @@ class ReviewPage(QWidget):
 
         show_scene_card = scenes_empty and self._scan_had_scenes()
         self.scenes_empty.setVisible(show_scene_card)
+        self.scenes_empty_space.setVisible(show_scene_card)
         self.scene_scroll.setVisible(not show_scene_card)
         for w in self.scenes_bulk:
-            w.setEnabled(not scenes_empty)
+            w.setEnabled(bool(self.project.scenes))
         if show_scene_card:
             found = (f"found none of {viewer}'s scene types." if viewer else
                      "found none of the scene types in your settings.")
@@ -1666,6 +1681,11 @@ class ReviewPage(QWidget):
         self.scene_rows = []
         painted = list(getattr(self.project, "paint", None) or [])
         scenes_scanned = self._scan_had_scenes()
+        if not self.project.scenes and scenes_scanned:
+            viewer = self._viewer_name()
+            self.scene_list.addWidget(label(
+                f"The scan found none of {viewer}'s scene types." if viewer else
+                "The scan found none of the scene types in your settings.", "Muted"))
         if painted:
             self.scene_list.addWidget(label(f"Painted blurs and removed blurs ({len(painted)})"
                                             if any(x.get("mode") == "clear" for x in painted)

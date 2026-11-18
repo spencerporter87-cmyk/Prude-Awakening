@@ -115,9 +115,11 @@ def test_empty_card_link_is_keyboard_reachable(qapp, no_multimedia, movie):
         page.words_empty_link.setFocus()
         qapp.processEvents()
         assert page.words_empty_link.hasFocus()
-        QTest.keyClick(page.words_empty_link, Qt.Key_Space)
-        qapp.processEvents()
-        assert calls == [1]
+        for key in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter):
+            calls.clear()
+            QTest.keyClick(page.words_empty_link, key)
+            qapp.processEvents()
+            assert calls == [1]
     finally:
         close(page, qapp)
 
@@ -256,7 +258,11 @@ def test_painted_blur_leaves_scenes_empty(qapp, no_multimedia, movie):
 
         assert page.scenes_empty.isHidden()
         assert not page.scene_scroll.isHidden()
-        assert all(w.isEnabled() for w in page.scenes_bulk)
+        texts = [lab.text() for lab in page.scene_host.findChildren(QLabel)]
+        assert "The scan found none of Family night's scene types." in texts
+        assert all(not w.isEnabled() for w in page.scenes_bulk)
+        assert page.scene_paint_btn.isEnabled()
+        assert page.add_scene_btn.isEnabled()
         assert page.go.isEnabled()
         assert "1 painted blur" in page.summary.text()
     finally:
